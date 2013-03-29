@@ -15,6 +15,7 @@
 
 package PgCommon;
 use strict;
+use File::Basename;
 use Socket;
 use POSIX;
 
@@ -45,7 +46,7 @@ if ($ENV{'PG_CLUSTER_CONF_ROOT'}) {
     ($confroot) = $ENV{'PG_CLUSTER_CONF_ROOT'} =~ /(.*)/; # untaint
 }
 my $common_confdir = "/etc/postgresql-common";
-my $binroot = "/usr/lib/postgresql";
+my $binroot = "/usr/local/opt/postgresql";
 my $defaultport = 5432;
 
 {
@@ -393,7 +394,7 @@ sub set_cluster_socketdir {
 # Arguments: <program name> <version>
 sub get_program_path {
     return '' unless defined($_[0]) && defined($_[1]);
-    my $path = "$binroot/$_[1]/bin/$_[0]";
+    my $path = "$binroot-$_[1]/bin/$_[0]";
     ($path) = $path =~ /(.*)/; #untaint
     return $path if -x $path;
     return '';
@@ -537,11 +538,12 @@ sub check_pidfile_running {
     my $pid = read_pidfile $_[0];
     if (defined $pid) {
 	prepare_exec;
-	my $res = open PS, '-|', '/bin/ps', '-o', 'comm', 'h', 'p', $pid;
+	my $res = open PS, '-|', '/bin/ps', '-o', 'comm=', '-p', $pid;
 	restore_exec;
 	if ($res) {
 	    my $process = <PS>;
 	    chomp $process if defined $process;
+	    $process = basename($process) if defined $process;
 	    close PS;
 	    if (defined $process and ($process eq 'postmaster' or $process eq 'postgres')) {
                 return 1;
@@ -610,11 +612,11 @@ sub cluster_info {
 # Return an array of all available PostgreSQL versions
 sub get_versions {
     my @versions = ();
-    if (opendir (D, $binroot)) {
+    if (opendir (D, dirname($binroot))) {
 	my $entry;
         while (defined ($entry = readdir D)) {
-            next if $entry eq '.' || $entry eq '..';
-	    ($entry) = $entry =~ /^(\d+\.\d+)$/; # untaint
+            next if $entry eq '.' || $entry eq '..' || $entry !~ /postgresql-\d+/;
+	    ($entry) = ($entry =~ /^postgresql-(\d+\.\d+)$/); # untaint
             push @versions, $entry if get_program_path ('psql', $entry);
         }
         closedir D;

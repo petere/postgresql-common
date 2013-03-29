@@ -93,11 +93,11 @@ unless ($version) {
     if (get_versions) {
 	error 'No existing local cluster is suitable as a default target. Please see man pg_wrapper(1) how to specify one.';
     } else {
-	error 'You must install at least one postgresql-client-<version> package.';
+	error 'You must install at least one postgresql-<version> package.';
     }
 }
 
-error 'Invalid PostgreSQL cluster version' unless -d "/usr/lib/postgresql/$version";
+error 'Invalid PostgreSQL cluster version' unless -d "/usr/local/opt/postgresql-$version";
 my $cmdname = (split '/', $0)[-1];
 my $cmd;
 
