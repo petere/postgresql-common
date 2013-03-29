@@ -23,7 +23,7 @@ use POSIX qw/setlocale LC_ALL LC_CTYPE/;
 
 $ENV{'PATH'} = '/bin:/usr/bin'; # untaint
 
-my @postgres_user = getpwnam 'postgres';
+my @postgres_user = getpwuid $<;
 my $explicit_auth_config = 0;
 
 # call initdb 
