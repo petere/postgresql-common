@@ -149,21 +149,25 @@ sub adapt_conffiles {
 
         # SSL certificate paths have an explicit option now, older versions use
         # a symlink
-        my $ssl_crt = $info{'pgdata'} . '/server.crt';
-        if (-l $ssl_crt) {
-	    PgCommon::set_conf_value $newversion, $cluster, 'postgresql.conf',
-                'ssl_cert_file', (readlink $ssl_crt);
-        }
-        my $ssl_key = $info{'pgdata'} . '/server.key';
-        if (-l $ssl_key) {
-	    PgCommon::set_conf_value $newversion, $cluster, 'postgresql.conf',
-                'ssl_key_file', (readlink $ssl_key);
-        }
-        my $root_crt = $info{'pgdata'} . '/root.crt';
-        if (-l $root_crt) {
-	    PgCommon::set_conf_value $newversion, $cluster, 'postgresql.conf',
-                'ssl_ca_file', (readlink $root_crt);
-        }
+	for my $f (['server.crt', 'ssl_cert_file'],
+		   ['server.key', 'ssl_key_file'],
+		   ['root.crt', 'ssl_ca_file'],
+		   ['root.crl', 'ssl_crl_file']) {
+	    my $file = "$newinfo{'pgdata'}/$f->[0]";
+	    if (-l $file) { # migrate symlink to config entry with link target
+		PgCommon::set_conf_value $newversion, $cluster, 'postgresql.conf',
+		    $f->[1], (readlink $file);
+		unlink $file;
+	    } elsif (-e $file) { # plain file in data dir, put in config
+		PgCommon::set_conf_value $newversion, $cluster, 'postgresql.conf',
+		    $f->[1], $file;
+	    }
+	}
+    }
+
+    if ($newversion >= '9.3') {
+        rename_ \%c, 'unix_socket_directory', 'unix_socket_directories';
+        rename_ \%c, 'replication_timeout', 'wal_sender_timeout';
     }
 }
 
@@ -173,17 +177,19 @@ sub adapt_conffiles {
 sub disable_connections {
     my $hba = "$PgCommon::confroot/$_[0]/$_[1]/pg_hba.conf";
 
-    rename $hba, "$hba.orig" or error "could not rename $hba: $!";
+    return if (-e "$hba.pg_upgradecluster"); # leftover from a previous upgrade
+		# attempt, do not rename again so we do not lose the original
+    rename $hba, "$hba.pg_upgradecluster" or error "could not rename $hba: $!";
     unless (open F, ">$hba") {
-        rename "$hba.orig", $hba;
+        rename "$hba.pg_upgradecluster", $hba;
         error "could not create $hba";
     }
     chmod 0400, $hba;
     chown $_[3], 0, $hba;
     if ($_[0] >= '8.4') {
-	print F "local all $_[2] ident";
+	print F "local all $_[2] ident\n";
     } else {
-	print F "local all $_[2] ident sameuser";
+	print F "local all $_[2] ident sameuser\n";
     }
     close F;
 }
@@ -193,8 +199,8 @@ sub disable_connections {
 sub enable_connections {
     my $hba = "$PgCommon::confroot/$_[0]/$_[1]/pg_hba.conf";
 
-    rename "$hba.orig", $hba or error "could not rename $hba.orig: $!"
-	if (-e "$hba.orig");
+    rename "$hba.pg_upgradecluster", $hba or error "could not rename $hba.pg_upgradecluster: $!"
+	if (-e "$hba.pg_upgradecluster");
 }
 
 # Get encoding and locales of a running cluster
@@ -348,12 +354,12 @@ my $pg_restore = get_program_path 'pg_restore', $newversion;
 
 # check whether upgrade scripts exist; if so, verify that pg_restore supports
 # -X no-data-for-failed-tables.
-my $upgrade_scripts = (-d '/etc/postgresql-common/pg_upgradecluster.d' &&
-     `run-parts --test /etc/postgresql-common/pg_upgradecluster.d`);
+my $upgrade_scripts = (-d "$PgCommon::common_confdir/pg_upgradecluster.d" &&
+     `run-parts --test $PgCommon::common_confdir/pg_upgradecluster.d`);
 
 if ($upgrade_scripts) {
     if (`$pg_restore --help` !~ qr/no-data-for-failed-tables/) {
-	error '/etc/postgresql-common/pg_upgradecluster.d has upgrade scripts, but $pg_restore does not support the "-X no-data-for-failed-tables" option.'
+	error "$PgCommon::common_confdir/pg_upgradecluster.d has upgrade scripts, but $pg_restore does not support the \"-X no-data-for-failed-tables\" option."
     }
 }
 
@@ -365,8 +371,8 @@ if ($upgrade_scripts) {
 
 	@argv = ('run-parts', '--lsbsysinit', '-a', $version, '-a', $cluster,
 	    '-a', $newversion, '-a', 'init',
-	    '/etc/postgresql-common/pg_upgradecluster.d');
-	error '/etc/postgresql-common/pg_upgradecluster.d script failed' if system @argv;
+	    "$PgCommon::common_confdir/pg_upgradecluster.d");
+	error "$PgCommon::common_confdir/pg_upgradecluster.d script failed" if system @argv;
 	exit 0;
     }
     wait;
@@ -425,7 +431,7 @@ if (!fork) {
 	# dump schemas
 	print "Roles, databases, schemas, ACLs...\n";
 	open SOURCE, '-|', $pg_dumpall, '-h', $oldsocket, '-p', $info{'port'},
-	     '-s' or error 'Could not execute pg_dumpall for old cluster';
+	     '-s', '--quote-all-identifiers' or error 'Could not execute pg_dumpall for old cluster';
 	my $data = '';
 	while (read SOURCE, $buffer, 1048576) {
 	    $data .= $buffer;
@@ -434,7 +440,7 @@ if (!fork) {
 	($? == 0) or exit 1;
 
 	# remove creation of db superuser role to avoid error message
-	$data =~ s/^CREATE (ROLE|USER) $owner;\s*$//m;
+	$data =~ s/^CREATE (ROLE|USER) "\Q$owner\E";\s*$//m;
 
 	# create global objects in target cluster
 	open SINK, '|-', $psql, '-h', $newsocket, '-p', $newinfo{'port'},
@@ -476,7 +482,7 @@ if (!fork) {
 
 	    print 'Upgrading database ', $db, "...\n";
 	    open SOURCE, '-|', $pg_dump, '-h', $oldsocket, '-p', $info{'port'},
-		 '-Fc', $db or 
+		 '-Fc', '--quote-all-identifiers', $db or 
 		error 'Could not execute pg_dump for old cluster';
 
 	    # start pg_restore and copy over everything
@@ -608,6 +614,18 @@ if ( -e $info{'configdir'}.'/pg_ctl.conf') {
     install_file $info{'configdir'}.'/pg_ctl.conf', $newinfo{'configdir'},
 	$newinfo{'owneruid'}, $newinfo{'ownergid'}, "644";
 }
+# copy SSL files (overwriting any file that pg_createcluster put there)
+for my $file (qw/server.crt server.key root.crt/) {
+    if ( -e "$info{'pgdata'}/$file") {
+	print "Copying old $file...\n";
+	if (!fork) { # we don't use install_file because that converts symlinks to files
+	    change_ugid $info{'owneruid'}, $info{'ownergid'};
+	    system "cp -a $info{'pgdata'}/$file $newinfo{'pgdata'}";
+	    exit 0;
+	}
+	wait;
+    }
+}
 
 adapt_conffiles;
 
@@ -628,7 +646,8 @@ if (open F, ">$startconf") {
 # cluster has been preserved for backup purposes, but is not started
 # automatically.
 
-manual";
+manual
+";
     close F;
 } else {
     error "could not create $startconf: $!";
@@ -650,8 +669,8 @@ if ($upgrade_scripts) {
 
 	@argv = ('run-parts', '--lsbsysinit', '-a', $version, '-a', $cluster,
 	    '-a', $newversion, '-a', 'finish',
-	    '/etc/postgresql-common/pg_upgradecluster.d');
-	error '/etc/postgresql-common/pg_upgradecluster.d script failed' if system @argv;
+	    "$PgCommon::common_confdir/pg_upgradecluster.d");
+	error "$PgCommon::common_confdir/pg_upgradecluster.d script failed" if system @argv;
 	exit 0;
     }
     wait;

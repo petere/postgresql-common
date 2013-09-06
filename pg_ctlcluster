@@ -6,6 +6,7 @@
 #
 # (C) 2005-2009 Martin Pitt <mpitt@debian.org>
 # (C) 2009 Cyril Bouthors <cyril@bouthors.org>
+# (C) 2013 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -22,6 +23,8 @@ use Getopt::Long;
 use POSIX qw/setsid dup2 setlocale LC_ALL :sys_wait_h/;
 use PgCommon;
 use Fcntl 'SEEK_SET';
+
+my $mode = 'smart'; # default shutdown mode
 
 # Check for known broken configurations of this cluster
 sub check_valid_config {
@@ -134,8 +137,13 @@ sub start {
         error("Port conflict: another instance is already running on $sockdir with port $info{'port'}");
     }
 
-    # prepare environment
+    # prepare environment (empty except for content of 'environment', and LANG)
     %ENV = read_cluster_conf_file $version, $cluster, 'environment';
+    # set LANG so non-ascii chars in the server log are not replaced by '?' (affected are non-session contexts)
+    unless (exists $ENV{LANG}) {
+	my $lc_messages = PgCommon::get_conf_value $version, $cluster, 'postgresql.conf', 'lc_messages';
+	$ENV{LANG} = $lc_messages if $lc_messages;
+    }
 
     my $postmaster_opts = '';
     my $usd = $version >= 9.3 ? 'unix_socket_directories' : 'unix_socket_directory';
@@ -165,12 +173,6 @@ sub start {
         if ($vrp_writable) {
             $postmaster_opts .= " -c external_pid_file=\"/var/run/postgresql/$version-$cluster.pid\"";
         }
-    }
-
-    if (! -d $info{'socketdir'}) {
-	print "Creating $info{'socketdir'} ...\n";
-	use File::Path qw(make_path);
-	make_path ($info{'socketdir'}, { owner => $info{'owneruid'}, group => $info{'ownergid'} });
     }
 
     $postmaster_opts .= ' ' . (join ' ', @postmaster_auxoptions);
@@ -272,7 +274,7 @@ sub stop {
     } else {
         if (!fork()) {
             close STDOUT;
-            exec $pg_ctl, '-D', $info{'pgdata'}, '-s', '-w', @pg_ctl_opts_from_cli, 'stop'; 
+            exec $pg_ctl, '-D', $info{'pgdata'}, '-s', '-w', '-m', $mode, @pg_ctl_opts_from_cli, 'stop';
         } else {
             wait;
 	    $result = $? >> 8;
@@ -310,7 +312,16 @@ sub promote {
 #
 
 exit 1 unless GetOptions ('o|options=s' => \@postmaster_auxoptions,
-    'f|force' => \$force);
+    'f|force' => \$force,
+    'm|mode=s' => \$mode,
+);
+
+if ($mode =~ /^(s(mart)?|f(ast)?|i(mmediate)?)$/) {
+    $mode = $1; # untaint
+} else {
+    print "Invalid -m mode, valid are: smart fast immediate\n";
+    exit 1;
+}
 
 if ($#ARGV < 2) {
     print "Usage: $0 <version> <cluster> <action>\n";
@@ -332,6 +343,7 @@ error 'specified cluster does not exist' unless $version && $cluster && cluster_
 %info = cluster_info ($version, $cluster);
 
 unless ($action eq 'stop') {
+    # check if cluster is disabled in start.conf
     error 'Cluster is disabled' if $info{'start'} eq 'disabled';
 }
 
@@ -372,6 +384,18 @@ if ($action ne 'stop' && $info{'logfile'} && ! -e $info{'logfile'}) {
     close L;
 }
 
+# recreate /var/run/postgresql
+if ($action ne 'stop' && ! -d $info{'socketdir'}) {
+    system 'install', '-d', '-m', 2775,
+	'-o', $info{'owneruid'}, '-g', $info{'ownergid'}, $info{'socketdir'};
+}
+
+# recreate stats_temp_directory
+if ($action ne 'stop' && $info{'statstempdir'} && ! -d $info{'statstempdir'}) {
+    system 'install', '-d', '-m', 750,
+	'-o', $info{'owneruid'}, '-g', $info{'ownergid'}, $info{'statstempdir'};
+}
+
 if ($> == 0) {
     # have the postmaster start with increased OOM killer protection; 9.1 and
     # later has builtin support for resetting the adjustment of child processes
@@ -391,9 +415,11 @@ if ($> == 0) {
     change_ugid $info{'owneruid'}, $info{'ownergid'};
 }
 
+# we are running as the cluster owner now
+
 if( $> != $info{'owneruid'} ) {
     error 'You must run this program as the cluster owner ('.
-        (getpwuid $info{'owneruid'})[0].')';
+        (getpwuid $info{'owneruid'})[0].') or root';
 }
 
 $pg_ctl = get_program_path 'pg_ctl', $version;
@@ -446,16 +472,7 @@ failure conditions.
 =item B<stop>
 
 Stops the L<postmaster(1)> server of the given cluster. By default, "smart"
-mode is used, which waits until all clients disconnected.
-
-With the B<--force> option the "fast" mode is used which rolls back all active
-transactions, disconnects clients immediately and thus shuts down cleanly. If
-that does not work, shutdown is attempted again in "immediate" mode, which can
-leave the cluster in an inconsistent state and thus will lead to a recovery run
-at the next start. If this still does not help, the B<postmaster> process is
-killed.  Exits with 0 on success, with 2 if the server is not running, and with
-1 on other failure conditions. This mode should only be used when the machine
-is about to be shut down.
+shutdown mode is used, which waits until all clients disconnected.
 
 =item B<restart>
 
@@ -477,7 +494,23 @@ operations.
 
 =over 4
 
-=item B<-o> I<option>
+=item B<-f>|B<--force>
+
+For B<stop> and B<restart>, the "fast" mode is used which rolls back all active
+transactions, disconnects clients immediately and thus shuts down cleanly. If
+that does not work, shutdown is attempted again in "immediate" mode, which can
+leave the cluster in an inconsistent state and thus will lead to a recovery run
+at the next start. If this still does not help, the B<postmaster> process is
+killed.  Exits with 0 on success, with 2 if the server is not running, and with
+1 on other failure conditions. This mode should only be used when the machine
+is about to be shut down.
+
+=item B<-m>|B<--mode> [B<smart>|B<fast>|B<immediate>]
+
+Shutdown mode to use for B<stop> and B<restart> actions, default is B<smart>.
+See pg_ctl(1) for documentation.
+
+=item B<-o>|B<--options> I<option>
 
 Pass given I<option> as command line option to the C<postmaster> process. It is
 possible to specify B<-o> multiple times. See L<postmaster(1)> for a
@@ -499,11 +532,17 @@ for a description of valid options.
 This configuration file contains cluster specific options to be passed to
 L<pg_ctl(1)>.
 
+=item C</etc/postgresql/>I<cluster-version>C</>I<cluster-name>C</start.conf>
+
+This configuration file controls the start/stop behavior of the cluster. See
+section "STARTUP CONTROL" in L<pg_createcluster(8)> for details.
+
 =back
 
 =head1 SEE ALSO
 
-L<pg_ctl(1)>, L<pg_wrapper(1)>, L<pg_lsclusters(1)>, L<postmaster(1)>
+L<pg_createcluster(8)>, L<pg_ctl(1)>, L<pg_wrapper(1)>, L<pg_lsclusters(1)>,
+L<postmaster(1)>
 
 =head1 AUTHOR
 

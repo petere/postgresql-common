@@ -4,6 +4,7 @@
 use strict; 
 
 use POSIX qw/dup2/;
+use Time::HiRes qw/usleep/;
 
 use lib 't';
 use TestLib;
@@ -11,7 +12,7 @@ use TestLib;
 use lib '/usr/share/postgresql-common';
 use PgCommon;
 
-use Test::More tests => ($#MAJORS == 0) ? 1 : 101 * 3;
+use Test::More tests => ($#MAJORS == 0) ? 1 : 103 * 3;
 
 if ($#MAJORS == 0) {
     pass 'only one major version installed, skipping upgrade tests';
@@ -43,6 +44,12 @@ SKIP: {
     is ((exec_as 'nobody', 'psql testro -c "CREATE TABLE test(num int)"'), 
 	1, 'creating table in testro fails');
 }
+
+# create a schema and a table with a name that was un-reserved between 8.4 and 9.1
+is ((exec_as 'nobody', 'psql test -c "CREATE SCHEMA \"old\""'),
+    0, 'create schema "old"');
+is ((exec_as 'nobody', 'psql test -c "CREATE TABLE \"old\".\"old\" (\"old\" text)"'),
+    0, 'create table "old.old"');
 
 # create a sequence
 is ((exec_as 'nobody', 'psql test -c "CREATE SEQUENCE odd10 INCREMENT BY 2 MINVALUE 1 MAXVALUE 10 CYCLE"'),
@@ -107,6 +114,7 @@ Bob|1
 ', 'check SELECT output');
 
 # create inaccessible cwd, to check for confusing error messages
+rmdir '/tmp/pgtest';
 mkdir '/tmp/pgtest/' or die "Could not create temporary test directory /tmp/pgtest: $!";
 chmod 0100, '/tmp/pgtest/';
 chdir '/tmp/pgtest';
@@ -121,6 +129,7 @@ if (!$psql) {
     dup2(POSIX::open('/dev/null', POSIX::O_WRONLY), 2);
     exec 'psql', 'template1' or die "could not exec psql process: $!";
 }
+usleep 200_000; # 200ms
 
 like_program_out 0, "pg_upgradecluster $upgrade_options $MAJORS[0] upgr", 1, 
     qr/Error: Could not stop old cluster/,
@@ -158,8 +167,8 @@ rmdir '/tmp/pgtest/';
 
 # Check clusters
 is_program_out 'nobody', 'pg_lsclusters -h', 0, 
-    "$MAJORS[0]     upgr      5433 down   postgres /var/lib/postgresql/$MAJORS[0]/upgr       /var/log/postgresql/postgresql-$MAJORS[0]-upgr.log
-$MAJORS[-1]     upgr      5432 online postgres /var/lib/postgresql/$MAJORS[-1]/upgr       /var/log/postgresql/postgresql-$MAJORS[-1]-upgr.log
+    "$MAJORS[0] upgr 5433 down   postgres /var/lib/postgresql/$MAJORS[0]/upgr /var/log/postgresql/postgresql-$MAJORS[0]-upgr.log
+$MAJORS[-1] upgr 5432 online postgres /var/lib/postgresql/$MAJORS[-1]/upgr /var/log/postgresql/postgresql-$MAJORS[-1]-upgr.log
 ", 'pg_lsclusters output';
 
 # Check that SELECT output is identical
@@ -215,7 +224,7 @@ SKIP: {
 	1, 'creating table in testro as superuser fails');
 }
 is ((exec_as 'nobody', 'psql testro -c "BEGIN READ WRITE; CREATE TABLE test(num int); COMMIT"'), 
-    0, 'creating table in test succeeds with RW transaction');
+    0, 'creating table in testro succeeds with RW transaction');
 
 # check DB parameter
 is_program_out 'postgres', 'psql -Atc "SHOW DateStyle" test', 0, 'ISO, YMD

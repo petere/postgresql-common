@@ -1,8 +1,110 @@
-postgresql-common (141) UNRELEASED; urgency=low
+postgresql-common (146) unstable; urgency=low
+
+  [ Christoph Berg ]
+  * debian/supported-versions: Use "7.*" to recognize wheezy; point releases
+    now increment the second version number component. (Closes: #712586)
+  * pg_virtualenv:
+    + On error, show tail of server log file.
+    + When no command is given, open a shell.
+  * pg_createcluster: Add --createclusterconf and --environment options.
+  * pg_ctlcluster: Create stats_temp_directory when missing.
+  * pg_ctlcluster: You must run this program as the cluster owner ... or root.
+  * postgresql-common: Demote dependency on logrotate to recommends.
+    (Closes: #714982).
+
+  [ Peter Eisentraut ]
+  * PgCommon.pm, pg_createcluster, pg_dropcluster: Don't call external
+    programs with full path where not necessary.
+
+ -- Christoph Berg <myon@debian.org>  Tue, 16 Jul 2013 16:11:35 +0200
+
+postgresql-common (145) unstable; urgency=low
+
+  [ Christoph Berg ]
+  * pg_ctlcluster: Use "install" instead of File::Path to create
+    unix_socket_directory. (Introduced in 141, Closes: #710093)
+
+  [ Martin Pitt ]
+  * debian/maintscripts-functions, configure_cluster(): Do not trust the
+    locale from the environment, as programs like ssh and sudo propagate
+    remote and user locale by default. Instead, only use the locale settings
+    from /etc/environment and /etc/default/locale, to prevent trying to
+    configure the default cluster with a nonexisting or hard to predict
+    locale. (LP: #969462, also see Debian #700271)
+
+ -- Christoph Berg <myon@debian.org>  Mon, 10 Jun 2013 17:01:01 +0200
+
+postgresql-common (144) unstable; urgency=low
+
+  * testsuite: Allow overriding the list of versions to test (-v).
+  * 040_upgrade: Add a test case for #688960 ("OLD used in query that is not
+    in a rule").
+  * pg_upgradecluster: Add --quote-all-identifiers to the pg_dump(all)
+    invocations so pg_dump-style upgrades do not fail when keywords get
+    un-reserved. (Closes: #688960; the pg_upgrade part of this will be fixed
+    in PostgreSQL upstream.)
+  * pg_ctlcluster: Add --mode shutdown option.
+  * pg_virtualenv: Allow running as non-root user.
+
+ -- Christoph Berg <myon@debian.org>  Fri, 31 May 2013 21:37:47 -0700
+
+postgresql-common (143) unstable; urgency=low
+
+  * debian/supported-versions: Don't explicitly support 9.3 for
+    testing/unstable yet, it is still in experimental. (Closes: #707675)
+  * debian/rules: Hack the version number of the metapackages to be
+    9.3+142really9.1-..., so that they are bigger than the previous botched
+    versions. This needs to stay until 9.3 actually goes into unstable.
+
+ -- Martin Pitt <mpitt@debian.org>  Fri, 10 May 2013 17:53:49 +0200
+
+postgresql-common (142) unstable; urgency=low
+
+  [ Christoph Berg ]
+  * Make all scripts honor PGSYSCONFDIR (defaulting to
+    /etc/postgresql-common).
+  * The default behavior of pg_createcluster can be configured in
+    /etc/postgresql-common/createcluster.conf. This also allows to disable the
+    creation of "main" clusters when postgresql server packages are installed,
+    and to set parameters in the new postgresql.conf.
+  * pg_createcluster: Move setting of log_line_prefix to createcluster.conf.
+  * debian/postgresql-common.postgresql.init: Do not die of one cluster fails
+    to start. (Closes: #699911)
+  * pg_checksystem: Suppress error message for unavailable filesystems.
+    (Closes: #705219)
+  * pg_upgradecluster: Use a distinct name (pg_hba.conf.pg_upgradecluster) for
+    the pg_hba.conf backup, and handle the case where this file already exists
+    gracefully.
+  * pg_upgradecluster: On upgrades to 9.3, rename unix_socket_directory to
+    unix_socket_directories.
+  * pg_upgradecluster, t/043_upgrade_ssl_cert.t: Copy server.crt and friends
+    in the data directory on upgrade. (Closes: #698958)
+  * pg_ctlcluster: Set LANG so non-ascii chars in the server log are not
+    replaced by '?'. Thanks to Adrian Vondendriesch for help debugging this.
+    (Closes: #671915)
+
+  [ Martin Pitt ]
+  * debian/supported-versions: Add 9.3 for testing/unstable.
+  * debian/supported-versions: Add Ubuntu 13.10.
+  * Bump Standards-Versio to 3.9.4 (no changes necessary).
+  * pg_upgradecluster: For upgrades to 9.3, migrate "replication_timeout" to
+    "wal_sender_timeout".
+  * t/060_obsolete_confparams.t: Add full 9.2 configuration, to test 9.2 → 9.3
+    upgrades.
+
+ -- Martin Pitt <mpitt@debian.org>  Tue, 07 May 2013 11:11:58 +0200
+
+postgresql-common (141) experimental; urgency=low
 
   [ Christoph Berg ]
   * debian/maintscripts-functions: Fix configure_client_version to call
     _link_manpages correctly, spotted by Kris Shannon. (Closes: #701602)
+  * debian/postgresql-common.sysctl: Note that the file is Linux-specifc and
+    do some rewording of the comments.
+  * debian/supported-versions:
+    + Deprecate 8.3 for pgdg builds.
+    + Handle missing os-release and lsb_release gracefully, just print a
+      warning. (Affects squeeze systems, Introduced by the fix for #697182).
   * pg_buildext: Deprecate <srcdir> parameter. The docs do not mention it
     anymore, but the script will still accept it.
   * pg_createcluster, pg_upgradecluster: For 9.2 and higher, use the new
@@ -11,6 +113,7 @@ postgresql-common (141) UNRELEASED; urgency=low
   * pg_createcluster: If /etc/postgresql-common/root.crl is present, symlink
     it (<= 9.1), or set ssl_crl_file (>= 9.2).
   * pg_ctlcluster: Create (first) unix_socket_directory if missing.
+  * pg_ctlcluster: Document start.conf by pointing at pg_createcluster(8).
   * pg_lsclusters: Make output column widths dynamically adjust to contents;
     shorten "Version" in header to "Ver".
   * pg_upgradecluster: Get cluster encoding before shutting down the cluster
@@ -31,6 +134,7 @@ postgresql-common (141) UNRELEASED; urgency=low
   * pg_updatedicts: Cleanup tsearch data files which do not have a
     corresponding hunspell or myspell dictionary installed any more.
     (Closes: #689996)
+  * Adjust upgrade tests according to the changed pg_lscluster formatting.
 
   [ Peter Eisentraut ]
   * Add support for pg_upgrade: (Closes: #682938)
@@ -38,7 +142,7 @@ postgresql-common (141) UNRELEASED; urgency=low
       dump/restore, and call pg_upgrade when selected.
     - t/040_upgrade.t: Test all upgrade methods.
 
- -- Christoph Berg <myon@debian.org>  Wed, 06 Mar 2013 17:38:49 +0100
+ -- Christoph Berg <myon@debian.org>  Wed, 10 Apr 2013 16:25:06 +0200
 
 postgresql-common (140) experimental; urgency=low
 

@@ -1,7 +1,7 @@
 # Common functions for the postgresql-common framework
 #
 # (C) 2008-2009 Martin Pitt <mpitt@debian.org>
-# (C) 2012 Christoph Berg <myon@debian.org
+# (C) 2012-2013 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -16,6 +16,7 @@
 package PgCommon;
 use strict;
 use File::Basename;
+use IPC::Open3;
 use Socket;
 use POSIX;
 
@@ -40,12 +41,15 @@ sub error {
 }
 
 # configuration
-my $mapfile = "/etc/postgresql-common/user_clusters";
 our $confroot = '/etc/postgresql';
 if ($ENV{'PG_CLUSTER_CONF_ROOT'}) {
     ($confroot) = $ENV{'PG_CLUSTER_CONF_ROOT'} =~ /(.*)/; # untaint
 }
-my $common_confdir = "/etc/postgresql-common";
+our $common_confdir = "/etc/postgresql-common";
+if ($ENV{'PGSYSCONFDIR'}) {
+    ($common_confdir) = $ENV{'PGSYSCONFDIR'} =~ /(.*)/; # untaint
+}
+my $mapfile = "$common_confdir/user_clusters";
 my $binroot = "/usr/local/opt/postgresql";
 my $defaultport = 5432;
 
@@ -560,7 +564,8 @@ sub check_pidfile_running {
 # Return a hash with information about a specific cluster.
 # Arguments: <version> <cluster name>
 # Returns: information hash (keys: pgdata, port, running, logfile [unless it
-#          has a custom one], configdir, owneruid, ownergid, socketdir)
+#          has a custom one], configdir, owneruid, ownergid, socketdir,
+#          statstempdir)
 sub cluster_info {
     error 'cluster_info must be called with <version> <cluster> arguments' unless $_[0] && $_[1];
 
@@ -570,6 +575,7 @@ sub cluster_info {
     $result{'pgdata'} = cluster_data_directory $_[0], $_[1], \%postgresql_conf;
     $result{'port'} = $postgresql_conf{'port'} || $defaultport;
     $result{'socketdir'} = get_cluster_socketdir  $_[0], $_[1];
+    $result{'statstempdir'} = $postgresql_conf{'stats_temp_directory'};
 
     # if we can determine the running status with the pid file, prefer that
     if ($postgresql_conf{'external_pid_file'} &&
@@ -798,7 +804,7 @@ sub user_cluster_map {
 sub install_file {
     my ($source, $dest, $uid, $gid, $perm) = @_;
     
-    if (system '/usr/bin/install', '-o', $uid, '-g', $gid, '-m', $perm, $source, $dest) {
+    if (system 'install', '-o', $uid, '-g', $gid, '-m', $perm, $source, $dest) {
 	error "install_file: could not install $source to $dest";
     }
 }
@@ -968,15 +974,17 @@ sub get_cluster_databases {
 sub get_file_device {
     my $dev = '';
     prepare_exec;
-    if (open DF, '-|', '/bin/df', $_[0]) {
-        while (<DF>) {
-            if (/^\/dev/) {
-                $dev = (split)[0];
-            }
-        }
+    my $pid = open3(\*CHLD_IN, \*CHLD_OUT, \*CHLD_ERR, '/bin/df', $_[0]);
+    waitpid $pid, 0; # we simply ignore exit code and stderr
+    while (<CHLD_OUT>) {
+	if (/^\/dev/) {
+	    $dev = (split)[0];
+	}
     }
     restore_exec;
-    close DF;
+    close CHLD_IN;
+    close CHLD_OUT;
+    close CHLD_ERR;
     return $dev;
 }
 

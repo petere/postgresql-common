@@ -48,7 +48,7 @@ get_release() {
         RELEASE="`lsb_release -rs`"
     else
         echo "supported_versions: WARNING: /etc/os-release and lsb_release not present, unknown distribution" >&2
-        exit 1
+        /bin/echo -e "$DEFAULT"
     fi
 }
 
@@ -76,7 +76,7 @@ ubuntu() {
         9.10|10.04|10.10|11.04)
             /bin/echo -e "8.4"
             ;;
-        11.10|12.04|12.10|13.04)
+        11.10|12.04|12.10|13.04|13.10)
             /bin/echo -e "9.1"
             ;;
         *)
@@ -94,7 +94,7 @@ debian() {
         6.0*) # Squeeze
             /bin/echo -e "8.4"
             ;;
-        7.0*) # Wheezy
+        7.*) # Wheezy
             /bin/echo -e "9.1"
             ;;
         testing | unstable)
@@ -115,7 +115,7 @@ debian_backports() {
         6.0*) # Squeeze
             /bin/echo -e "8.4\n9.1"
             ;;
-        7.0*) # Wheezy
+        7.*) # Wheezy
             /bin/echo -e "9.1\n9.2"
             ;;
         testing | unstable)
@@ -132,11 +132,11 @@ pgdg() {
     case "$1" in
         testing | unstable)
             # including beta versions
-            /bin/echo -e "8.3\n8.4\n9.0\n9.1\n9.2"
+            /bin/echo -e "8.4\n9.0\n9.1\n9.2"
             ;;
         *)
             # no beta versions here
-            /bin/echo -e "8.3\n8.4\n9.0\n9.1\n9.2"
+            /bin/echo -e "8.4\n9.0\n9.1\n9.2"
             ;;
     esac
 }
