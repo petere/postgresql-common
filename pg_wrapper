@@ -97,7 +97,7 @@ unless ($version) {
     }
 }
 
-error 'Invalid PostgreSQL cluster version' unless -d "/usr/local/opt/postgresql-$version";
+error 'Invalid PostgreSQL cluster version' unless -d "/usr/lib/postgresql/$version";
 my $cmdname = (split '/', $0)[-1];
 my $cmd;
 
