@@ -202,7 +202,7 @@ my $cleanup_cruft = 0;
 
 # command line arguments
 
-my $startconf = 'auto';
+my $startconf = '';
 my $createclusterconf = "$PgCommon::common_confdir/createcluster.conf";
 my $environmentfile = "$PgCommon::common_confdir/environment";
 
@@ -253,7 +253,7 @@ Options:
     exit 1;
 }
 
-$startconf = $defaultconf{'start_conf'} if ($defaultconf{'start_conf'});
+$startconf ||= $defaultconf{'start_conf'} || 'auto';
 error "Invalid --start-conf value: $startconf" if $startconf ne 'auto' &&
     $startconf ne 'manual' && $startconf ne 'disabled';
 
@@ -381,9 +381,12 @@ PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', 'data_directory'
 setup_pg_hba $version if $newcluster and not $explicit_auth_config;
 
 # configure socket directory
+if (! $socketdir && ! -e '/var/run/postgresql') {
+    system 'install', '-d', '-o', $postgres_user[2], '-g', $postgres_user[3], '/var/run/postgresql';
+}
 if ($socketdir && ! -e $socketdir) {
     if (system 'install', '-d', '-m', '0755', '-o', $owneruid, '-g', $ownergid, $socketdir) {
-        error 'could not create socket directory';
+        error "could not create socket directory $socketdir";
     }
 }
 $orig_euid = $>;

@@ -1,3 +1,94 @@
+postgresql-common (152) unstable; urgency=low
+
+  [ Martin Pitt ]
+  * debian/backport-ppa: Drop oneiric/quantal for -9.2, only keep
+    lucid/precise.
+  * Drop support for obsolete oom_adj, all kernels in all supported
+    Debian/Ubuntu releases support oom_score_adj. (See #646245)
+  * debian/README.Debian: Fix commands to get a postgres user shell.
+  * Change all "su" invocations to system user to specify an explicit shell,
+    to fix breakage after latest base-passwd 3.5.30 (which changed system
+    users to have no shell).
+  * Bump Standards-Version to 3.9.5 (no changes necessary).
+
+  [ Christoph Berg ]
+  * pg_virtualenv: Fix program name in manpage.
+  * pg_createcluster: --start-conf should override the value from
+    createcluster.conf.
+  * testsuite: Also mount a tmpfs on /etc/postgresql-common.
+
+ -- Martin Pitt <mpitt@debian.org>  Thu, 09 Jan 2014 10:56:12 +0100
+
+postgresql-common (151) unstable; urgency=low
+
+  * pg_createcluster: Create /var/run/postgresql when missing.
+  * pg_virtualenv: Set PG_CONFIG in single version mode.
+  * pg_wrapper: Always use the latest available version of "pg_isready"
+    instead of the target cluster's. pg_isready appeared only in 9.3, but is
+    usable with older versions as well. Suggested by Peter Eisentraut.
+    (Closes: #728599)
+
+ -- Christoph Berg <myon@debian.org>  Thu, 05 Dec 2013 16:32:51 +0100
+
+postgresql-common (150) unstable; urgency=low
+
+  [ Christoph Berg ]
+  * Create the postgres group when missing, and add the postgres user to it.
+    Could happen when the postgres user was created manually.
+
+  [ Martin Pitt ]
+  * debian/supported-versions: Welcome, Ubuntu 14.04! Support 9.3 there.
+
+ -- Martin Pitt <mpitt@debian.org>  Mon, 21 Oct 2013 22:08:20 +0200
+
+postgresql-common (149) unstable; urgency=low
+
+  * debian/supported-versions: Set default version to 9.3. Drop 9.2 from
+    wheezy-backports.
+  * /etc/apt/apt.conf.d/01autoremove-postgresql: Mark ^postgresql- as
+    NeverAutoRemove, so upgrading the "postgresql" meta package doesn't
+    automatically remove access to the old clusters. (Closes: #714725)
+  * pg_wrapper: Print a more informative error message when program to execute
+    was not found in /usr/lib/postgresql.
+  * debian/postgresql-client-common.links: Wrap pg_isready and pg_receivexlog.
+
+ -- Christoph Berg <myon@debian.org>  Mon, 09 Sep 2013 14:15:18 +0200
+
+postgresql-common (148) unstable; urgency=low
+
+  [ Christoph Berg ]
+  * debian/supported-versions:
+    + Interface change: The *last* version returned here is the "default" one.
+    + Wheezy uses "7" in /etc/os-release.
+    + Add 9.3 for pgdg (default on testing/unstable).
+  * debian/rules:
+    + Set FLAVOR variable for the type of build we are doing. Set
+      PG_SUPPORTED_VERSIONS=$FLAVOR for debian/supported-versions so we don't
+      pick up configuration from the build environment.
+    + Pick the default version from the last line of
+      `debian/supported-versions` instead of sorting the output.
+  * debian/postgresql-common.config: Sort versions to determine the latest.
+  * pg_buildext: Support "X.Y+" and "all" in debian/pgversions so packages do
+    not need to hardcode the versions they support, as that's usually not
+    necessary.
+  * pgxs_debian_control.mk: Drop the previously redundant grep check on
+    debian/pgversions which would now break "X.Y+".
+  * t: Move $delay to TestLib.pm and increase to 500ms.
+  * t/005_PgCommon.t: Use twice the delay for waiting for the first nc child.
+
+  [ Martin Pitt ]
+  * debian/postgresql-common.postinst: Don't restart servers in dict update
+    trigger. (Closes: #719282)
+  * debian/README.Debian: Update examples for -9.1 and -9.3.
+
+ -- Martin Pitt <mpitt@debian.org>  Tue, 27 Aug 2013 11:07:48 +0200
+
+postgresql-common (147) unstable; urgency=low
+
+  * Bump "really142" to "really146" to fix an error on apt.postgresql.org.
+
+ -- Christoph Berg <myon@debian.org>  Thu, 18 Jul 2013 09:11:38 +0200
+
 postgresql-common (146) unstable; urgency=low
 
   [ Christoph Berg ]
@@ -826,7 +917,7 @@ postgresql-common (110) unstable; urgency=low
 
   [ Dimitri Fontaine ]
   * Add new package postgresql-server-dev-all:
-    - "pb_buildext" tool for easy building of extension packages for multiple
+    - "pg_buildext" tool for easy building of extension packages for multiple
       server versions.
     - pgxs_debian_control.mk debian/rules include for generating
       debian/control.
