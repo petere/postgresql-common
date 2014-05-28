@@ -20,7 +20,7 @@ POD2MAN=pod2man --center "Debian PostgreSQL infrastructure" -r "Debian"
 POD1PROGS=pg_wrapper pg_lsclusters
 POD8PROGS=pg_ctlcluster pg_createcluster pg_dropcluster
 
-common_programs = pg_wrapper pg_createcluster pg_ctlcluster pg_dropcluster pg_lsclusters pg_upgradecluster
+common_programs = pg_wrapper pg_createcluster pg_ctlcluster pg_dropcluster pg_lsclusters pg_updatedicts pg_upgradecluster
 
 wrapped_programs = clusterdb createdb createlang createuser dropdb droplang dropuser pg_dump pg_dumpall pg_basebackup pg_isready pg_restore pg_receivexlog psql reindexdb vacuumdb vacuumlo pgbench
 
