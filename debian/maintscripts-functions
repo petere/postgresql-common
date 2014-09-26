@@ -7,14 +7,28 @@ _link_manpages() {
     [ -n "$MANS" ] || return 0
 
     SLAVES=$(for i in $MANS; do TARGET=$(echo $i | sed "s/postgresql\/$1\///"); echo -n " --slave $TARGET $(basename $i) $i"; done)
-    update-alternatives --install /usr/share/man/man1/$2 \
-	$2 /usr/share/postgresql/$1/man/man1/$2 \
+    # pg_basebackup once moved from server to client; upgrades are still
+    # affected by this for quite a while, so remove this alternative before
+    # reinstalling it to avoid failure. This needs to be kept until we stop
+    # supporting upgrades from -9.1.
+    if [ "$2" = "psql.1.gz" ]; then
+	OUT=$(LC_ALL=C update-alternatives --display postmaster.1.gz 2> /dev/null) || true
+	if [ "${OUT#*auto mode}" != "$OUT" ] && [ "${OUT#*pg_basebackup.1.gz}" != "$OUT" ]; then
+            echo "Adjusting postmaster.1.gz alternatives for pg_basebackup move..."
+	    update-alternatives --remove postmaster.1.gz /usr/share/postgresql/9.1/man/man1/postmaster.1.gz
+	fi
+    fi
+
+    section=$(echo "$2" | sed -e 's/.*\.\(.*\)\..*/man\1/')
+    update-alternatives --install /usr/share/man/$section/$2 \
+	$2 /usr/share/postgresql/$1/man/$section/$2 \
 	$(echo "$1" | tr -cd 0-9) $SLAVES
 }
 
 # arguments: version master
 _unlink_manpages() {
-    update-alternatives --remove $2 /usr/share/postgresql/$1/man/man1/$2
+    section=$(echo "$2" | sed -e 's/.*\.\(.*\)\..*/man\1/')
+    update-alternatives --remove $2 /usr/share/postgresql/$1/man/$section/$2
 }
 
 _remove_tsearch() {
@@ -106,5 +120,13 @@ configure_contrib_version() {
 remove_contrib_version() {
     # we still want to retain the alternatives for the server packages
     _link_manpages "$1" postmaster.1.gz "postgresql-$1"
+}
+
+configure_doc_version() {
+    _link_manpages "$1" SPI_connect.3.gz "postgresql-doc-$1"
+}
+
+remove_doc_version() {
+    _unlink_manpages "$1" SPI_connect.3.gz
 }
 

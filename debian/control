@@ -4,13 +4,15 @@ Priority: optional
 Maintainer: Debian PostgreSQL Maintainers <pkg-postgresql-public@lists.alioth.debian.org>
 Uploaders: Martin Pitt <mpitt@debian.org>, Christoph Berg <myon@debian.org>, Peter Eisentraut <petere@debian.org>
 Standards-Version: 3.9.5
-Vcs-Bzr: http://bzr.debian.org/bzr/pkg-postgresql/postgresql-common/trunk/
+Vcs-Bzr: http://anonscm.debian.org/bzr/pkg-postgresql/postgresql-common/trunk/
 Vcs-Browser: http://anonscm.debian.org/loggerhead/pkg-postgresql/postgresql-common/trunk
-Build-Depends: debhelper (>= 7.0.50~),
+Build-Depends: debhelper (>= 9),
+ dh-systemd (>= 1.19) | sysvinit (<< 2.88dsf-42),
  lsb-release
 
 Package: postgresql-common
 Architecture: all
+Multi-Arch: foreign
 Conflicts: postgresql-7.4, postgresql-8.0
 Depends: postgresql-client-common (>= ${source:Version}), 
  procps, 
@@ -18,10 +20,10 @@ Depends: postgresql-client-common (>= ${source:Version}),
  debconf (>= 0.5.00) | debconf-2.0,
  lsb-base (>= 3.0-3),
  ssl-cert (>= 1.0.11),
+ ucf,
  ${misc:Depends}
 Recommends: logrotate
-Breaks: postgresql-9.1 (<< 9.1.1-3~),
- ${common-breaks}
+Breaks: postgresql-9.1 (<< 9.1.1-3~)
 Description: PostgreSQL database-cluster manager
  The postgresql-common package provides a structure under which
  multiple versions of PostgreSQL may be installed and/or multiple
@@ -39,6 +41,7 @@ Description: PostgreSQL database-cluster manager
 
 Package: postgresql-client-common
 Architecture: all
+Multi-Arch: foreign
 Depends: ${misc:Depends}, ${pgdg:Depends},
  netbase
 Recommends: lsb-release, libreadline6
@@ -59,10 +62,12 @@ Description: manager for multiple PostgreSQL client versions
 
 Package: postgresql-server-dev-all
 Architecture: all
-Depends: ${misc:Depends}, 
+Depends: ${misc:Depends},
  postgresql-common (>= 117~),
+ iproute2 | net-tools,
  lsb-release,
  dctrl-tools,
+ make,
  ${server-dev-all-depends}
 Description: extension build tool for multiple PostgreSQL versions
  The postgresql-server-dev-all package provides the pg_buildext script for
@@ -79,6 +84,7 @@ Description: extension build tool for multiple PostgreSQL versions
 Package: postgresql
 Architecture: all
 Depends: postgresql-${default-version}, ${misc:Depends}
+Suggests: postgresql-doc
 Description: object-relational SQL database (supported version)
  This metapackage always depends on the currently supported PostgreSQL
  database server version.
@@ -93,6 +99,7 @@ Description: object-relational SQL database (supported version)
 
 Package: postgresql-client
 Architecture: all
+Multi-Arch: foreign
 Depends: postgresql-client-${default-version}, ${misc:Depends}
 Description: front-end programs for PostgreSQL (supported version)
  This metapackage always depends on the currently supported database
@@ -108,6 +115,7 @@ Description: front-end programs for PostgreSQL (supported version)
 
 Package: postgresql-doc
 Architecture: all
+Multi-Arch: foreign
 Section: doc
 Depends: postgresql-doc-${default-version}, ${misc:Depends}
 Description: documentation for the PostgreSQL database management system

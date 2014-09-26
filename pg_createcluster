@@ -4,7 +4,7 @@
 # the postgresql-common infrastructure.
 #
 # (C) 2005-2013 Martin Pitt <mpitt@debian.org>
-# (C) 2012-2013 Christoph Berg <myon@debian.org>
+# (C) 2012-2014 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -203,6 +203,7 @@ my $cleanup_cruft = 0;
 # command line arguments
 
 my $startconf = '';
+my $pgoptions = [];
 my $createclusterconf = "$PgCommon::common_confdir/createcluster.conf";
 my $environmentfile = "$PgCommon::common_confdir/environment";
 
@@ -210,6 +211,9 @@ exit 1 unless GetOptions ('u|user=s' => \$owneruid, 'g|group=s' => \$ownergid,
     's|socketdir=s' => \$socketdir, 'd|datadir=s' => \$datadir, 
     'start' => \$start, 'e|encoding=s' => \$encoding, 
     'l|logfile=s' => \$custom_logfile, 'start-conf=s' => \$startconf,
+    'o|pgoption=s' => sub { $_[1] =~ /(.*?)=(.*)/ or error ("No '=' in pgoption '$_[1]'");
+	push @pgoptions, [$1, $2];
+    },
     'createclusterconf=s' => \$createclusterconf,
     'environment=s' => \$environmentfile,
     'p|port=i' => \$port, 'locale=s' => \$locale,
@@ -258,17 +262,17 @@ error "Invalid --start-conf value: $startconf" if $startconf ne 'auto' &&
     $startconf ne 'manual' && $startconf ne 'disabled';
 
 if ($owneruid) {
-    $owneruid = (getpwnam $owneruid)[2] unless $owneruid =~ /\d+/;
+    $owneruid = (getpwnam $owneruid)[2] unless $owneruid =~ /^\d+$/;
 } elsif ($> == 0) {
     $owneruid = getpwnam 'postgres';
-    error 'User postgresql does not exist' unless $owneruid;
+    error 'User postgres does not exist' unless $owneruid;
 } else
 {
     $owneruid = $>;
 }
 
 if ($ownergid) {
-    $ownergid = (getgrnam $ownergid)[2] unless $ownergid =~ /\d+/;
+    $ownergid = (getgrnam $ownergid)[2] unless $ownergid =~ /^\d+$/;
 } else {
     $ownergid = (getpwuid $owneruid)[3];
 }
@@ -276,9 +280,9 @@ if ($ownergid) {
 error 'clusters must not be owned by root' unless $owneruid && $ownergid;
 
 ($version) = $ARGV[0] =~ /^(\d+\.\d+)$/;
-error 'invalid version' unless defined $version;
+error "invalid version '$ARGV[0]'" unless defined $version;
 ($cluster) = $ARGV[1] =~ /^([-.\w]+)$/;
-error 'invalid cluster name' unless defined $cluster;
+error "invalid cluster name '$ARGV[1]'" unless defined $cluster;
 splice @ARGV, 0, 2;
 
 # initdb options passed after --
@@ -394,7 +398,9 @@ $orig_egid = $);
 $) = $ownergid;
 $> = $owneruid;
 unless ($socketdir) {
-    if (-w '/var/run/postgresql') {
+    if ($PgCommon::rpm) {
+        $socketdir = '/tmp'; # RedHat defaults to /tmp in libpq et al.
+    } elsif (-w '/var/run/postgresql') {
 	$socketdir = '/var/run/postgresql';
     } else {
         $socketdir='/tmp';
@@ -443,11 +449,44 @@ $conf_fn = "configure_$version";
 $conf_fn =~tr/./_/;
 &$conf_fn if defined &$conf_fn and $newcluster;
 
+# SSL configuration
+my $want_ssl = PgCommon::config_bool($defaultconf{ssl} || 'true');
+
 # Check whether we can access the SSL private key as the cluster owner
+my $ssl_key_file = '/etc/ssl/private/ssl-cert-snakeoil.key';
+my $ssl_cert_file = '/etc/ssl/certs/ssl-cert-snakeoil.pem';
+my $ssl_ca_file = "$PgCommon::common_confdir/root.crt";
 my $ssl_key_access;
 my ($uid, $euid, $gid, $egid) = ($<, $>, $(, $));
 change_ugid $owneruid, $ownergid;
-$ssl_key_access = -r '/etc/ssl/private/ssl-cert-snakeoil.key';
+$ssl_key_access = -r $ssl_key_file;
+
+# check for stats_temp_directory access
+if ($defaultconf{stats_temp_directory} and $version >= 8.4) {
+    my $stats_temp_directory = replace_v_c ($defaultconf{stats_temp_directory}, $version, $cluster);
+    $stats_temp_directory =~ s!/$!!; # strip trailing slash
+    my $stats_temp_parent = $stats_temp_directory;
+    $stats_temp_parent =~ s!/[^/]+$!!;
+    if (-d $stats_temp_directory) {
+        if (! -w $stats_temp_directory) {
+            print "Warning: The selected stats_temp_directory $stats_temp_directory
+is not writable for the cluster owner. Not adding this setting in
+postgresql.conf.\n";
+            delete $defaultconf{stats_temp_directory};
+        }
+    } elsif (! -d $stats_temp_parent) {
+        print "Warning: The parent $stats_temp_parent of the selected
+stats_temp_directory does not exist. Not adding this setting in
+postgresql.conf.\n";
+        delete $defaultconf{stats_temp_directory};
+    } elsif (! -w $stats_temp_parent) {
+        print "Warning: The parent $stats_temp_parent of the selected
+stats_temp_directory is not writable for the cluster owner. Not adding this
+setting in postgresql.conf.\n";
+        delete $defaultconf{stats_temp_directory};
+    }
+}
+
 $> = $euid;
 $< = $uid; 
 $( = $gid;
@@ -456,39 +495,38 @@ die "changing euid back: $!" if $> != $euid;
 die "changing egid back: $!" if $) != $egid;
 
 # enable SSL if we have the snakeoil default certificate
-if ($newcluster && -e '/etc/ssl/certs/ssl-cert-snakeoil.pem' && 
-    $ssl_key_access) {
+if ($want_ssl && $newcluster && -e $ssl_cert_file && $ssl_key_access) {
     if ($version >= '9.2') {
         PgCommon::set_conf_value $version, $cluster, 'postgresql.conf',
-            'ssl_cert_file', '/etc/ssl/certs/ssl-cert-snakeoil.pem';
+            'ssl_cert_file', $ssl_cert_file;
         PgCommon::set_conf_value $version, $cluster, 'postgresql.conf',
-            'ssl_key_file', '/etc/ssl/private/ssl-cert-snakeoil.key';
+            'ssl_key_file', $ssl_key_file;
     } else {
-        symlink '/etc/ssl/certs/ssl-cert-snakeoil.pem', $datadir.'/server.crt';
-        symlink '/etc/ssl/private/ssl-cert-snakeoil.key', $datadir.'/server.key';
+        symlink $ssl_cert_file, "$datadir/server.crt";
+        symlink $ssl_key_file, "$datadir/server.key";
     }
 
     PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', 'ssl', 'true';
 }
 
 # SSL client certificate CA
-if ($newcluster && -e "$PgCommon::common_confdir/root.crt") {
+if ($want_ssl && $newcluster && -e $ssl_ca_file) {
     # check if we have a cert in there or just the boilerplate installed by our postinst
-    open F, "$PgCommon::common_confdir/root.crt";
+    open F, $ssl_ca_file;
     my $val;
     read F, $val, 4096;
     if ($val =~ /^-----BEGIN CERTIFICATE-----/m) {
         if ($version >= '9.2') {
             PgCommon::set_conf_value $version, $cluster, 'postgresql.conf',
-                'ssl_ca_file', "$PgCommon::common_confdir/root.crt";
+                'ssl_ca_file', $ssl_ca_file;
         } else {
-            symlink "$PgCommon::common_confdir/root.crt", $datadir.'/root.crt';
+            symlink $ssl_ca_file, $datadir.'/root.crt';
         }
     }
 }
 
 # SSL client certificate revocation list
-if ($newcluster && -e "$PgCommon::common_confdir/root.crl") {
+if ($want_ssl && $newcluster && -e "$PgCommon::common_confdir/root.crl") {
     if ($version >= '9.2') {
         PgCommon::set_conf_value $version, $cluster, 'postgresql.conf',
             'ssl_crl_file', "$PgCommon::common_confdir/root.crl";
@@ -528,9 +566,14 @@ if ($socketdir eq '/var/run/postgresql') {
 
 # handle other createcluster.conf parameters
 foreach my $guc (sort keys %defaultconf) {
-    next if $guc =~ /^(create_main_cluster|start_conf|data_directory|xlogdir|initdb_options)$/;
-    PgCommon::set_conf_value $version, $cluster, 'postgresql.conf',
-	$guc, replace_v_c ($defaultconf{$guc}, $version, $cluster);
+    next if $guc =~ /^(create_main_cluster|start_conf|data_directory|xlogdir|initdb_options|ssl)$/;
+    my $val = replace_v_c ($defaultconf{$guc}, $version, $cluster);
+    PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', $guc, $val;
+}
+
+# process --pgoption parameters
+foreach my $guc (@pgoptions) {
+    PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', $guc->[0], $guc->[1];
 }
 
 # start it if requested
@@ -607,7 +650,7 @@ certificate by default. For versions up to 9.1, symlinks in the data directory
 will be created (C<server.crt> and C<server.key>); for 9.2 and later, the
 appropriate C<postgresql.conf> options will be set (C<ssl_cert_file> and
 C<ssl_key_file>). Of course you can replace this with a cluster specific
-certificate. Similary for C</etc/postgresql-common/root.crt> and
+certificate. Similarly for C</etc/postgresql-common/root.crt> and
 C</etc/postgresql-common/root.crl>, these files will be configured as client
 certificate CA and revocation list, when present. (C<root.crt> is initially a
 placeholder that will only be used if real certificates are added to the file.)
@@ -699,6 +742,10 @@ CONTROL> below. By default, B<auto> is used, which means that the cluster is
 handled by C</etc/init.d/postgresql>, i. e. starts and stops
 automatically on system boot.
 
+=item B<-o> I<guc>B<=>I<value>, B<--pgoption> I<guc>B<=>I<value>
+
+Configuration option to set in the new C<postgresql.conf> file.
+
 =item B<--createclusterconf=>I<file>
 
 Alternative B<createcluster.conf> file to use. Default is
@@ -758,7 +805,9 @@ additional options passed to pg_ctl of that cluster.
 =head1 DEFAULT VALUES
 
 Some default values used by B<pg_createcluster> can be modified in
-C</etc/postgresql-common/createcluster.conf>:
+C</etc/postgresql-common/createcluster.conf>. Occurrences of B<%v> are replaced
+by the major version number, and B<%c> by the cluster name. Use B<%%> for a
+literal B<%>.
 
 =over 4
 
@@ -771,9 +820,6 @@ Create a B<main> cluster when a new postgresql-x.y server package is installed.
 Default C<start.conf> value to use.
 
 =back
-
-In the following options, occurrences of B<%v> are replaced by the major
-version number, and B<%c> by the cluster name. Use B<%%> for a literal B<%>.
 
 =over 4
 
@@ -791,12 +837,28 @@ default, i.e. pg_xlog is remains in the data directory.
 
 Other options to pass to B<initdb>.
 
-=item I<other options> (Default: none)
+=item Other options
 
 All other options listed are copied into the new cluster's postgresql.conf, e.g.:
 
     listen_addresses = '*'
     log_line_prefix = '%%t '
+
+Some postgresql.conf options are treated specially:
+
+=over 4
+
+=item B<ssl>
+
+Only added to postgresql.conf if the default snakeoil certificates exist and
+are readable for the cluster owner as detailed above.
+
+=item B<stats_temp_directory>
+
+Only added to postgresql.conf if existing, and writable for the cluster owner,
+or else if the parent directory is writable.
+
+=back
 
 =back
 

@@ -1,24 +1,67 @@
 #!/bin/sh
 
 set -e
-. /usr/share/debconf/confmodule
-db_stop
+[ "$DPKG_MAINTSCRIPT_PACKAGE" ] && . /usr/share/debconf/confmodule
 
 SSL_ROOT=/etc/postgresql-common/root.crt
 
+setup_createclusterconf ()
+{
+    [ "$DPKG_MAINTSCRIPT_PACKAGE" ] || return 0
+    db_get postgresql-common/ssl
+    case $RET in
+        true) SSL=on ;;
+        false) SSL=off ;;
+        *) return ;;
+    esac
+
+    CCTEMPLATE="/usr/share/postgresql-common/createcluster.conf"
+    CCTMP=`mktemp --tmpdir postgresql-common.XXXXXX`
+    trap "rm -f $CCTMP" 0 2 3 15
+    sed -e "s/^ssl =.*/ssl = $SSL/" $CCTEMPLATE > $CCTMP
+    chmod 644 $CCTMP
+    CCCONFIG="/etc/postgresql-common/createcluster.conf"
+    ucf --debconf-ok $CCTMP $CCCONFIG
+    ucfr postgresql-common $CCCONFIG
+    rm -f $CCTMP
+}
+
+setup_logrotate ()
+{
+    [ "$DPKG_MAINTSCRIPT_PACKAGE" ] || return 0
+    LRVERSION=$(dpkg-query -f '${Version}' --show logrotate 2> /dev/null) || return
+    [ "$LRVERSION" ] || return 0
+    LRTEMPLATE="/usr/share/postgresql-common/logrotate.template"
+    LRCONFIG="/etc/logrotate.d/postgresql-common"
+    if dpkg --compare-versions "$LRVERSION" ge 3.8; then
+	LRCONFSRC=$LRTEMPLATE
+    else
+	LRCONFSRC=`mktemp --tmpdir postgresql-common.XXXXXX`
+	trap "rm -f $LRCONFSRC" 0 2 3 15
+	sed -e '/ su /d' $LRTEMPLATE > $LRCONFSRC
+	chmod 644 $LRCONFSRC
+    fi
+    ucf --debconf-ok $LRCONFSRC $LRCONFIG
+    ucfr postgresql-common $LRCONFIG
+    if [ $LRCONFSRC != $LRTEMPLATE ]; then
+        rm -f $LRCONFSRC
+    fi
+}
+
 if [ "$1" = configure ]; then
+    [ "$DPKG_MAINTSCRIPT_PACKAGE" ] && quiet="--quiet" # RedHat doesn't have this
     # Make sure the administrative user exists
     if ! getent passwd postgres > /dev/null; then
-        adduser --system --quiet --home /var/lib/postgresql --no-create-home \
+        adduser --system $quiet --home /var/lib/postgresql --no-create-home \
             --shell /bin/bash --group --gecos "PostgreSQL administrator" postgres
     fi
     # if the user was created manually, make sure the group is there as well
     if ! getent group postgres > /dev/null; then
-        addgroup --system --quiet postgres
+        addgroup --system $quiet postgres
     fi
     # make sure postgres is in the postgres group
     if ! id -Gn postgres | grep -qw postgres; then
-        adduser --quiet postgres postgres
+        adduser $quiet postgres postgres
     fi
 
     # check validity of postgres user and group
@@ -35,7 +78,7 @@ Please fix this and reinstall this package." >&2
 
     # ensure home directory ownership
     mkdir -p /var/lib/postgresql
-    su -s /bin/sh - postgres -c "test -O /var/lib/postgresql &&
+    su -s /bin/sh postgres -c "test -O /var/lib/postgresql &&
             test -G /var/lib/postgresql" || \
         chown postgres:postgres /var/lib/postgresql
 
@@ -68,7 +111,7 @@ EOF
     # Add postgres user to the ssl-cert group on fresh installs
     if [ -z "$2" ]; then
 	if getent group ssl-cert >/dev/null; then
-	    adduser --quiet postgres ssl-cert
+	    adduser $quiet postgres ssl-cert
 	fi
     fi
 
@@ -83,15 +126,26 @@ EOF
 
     /usr/share/postgresql-common/pg_checksystem || true
 
+    # Create createcluster.conf from debconf
+    setup_createclusterconf
+
+    # Create logrotate config
+    setup_logrotate
+
     if dpkg --compare-versions "$2" lt 94; then
         pg_updatedicts || true
     fi
 fi
 
 if [ "$1" = triggered ]; then
+    setup_logrotate
     pg_updatedicts || true
-    exit 0  # ship daemon restart below
+    db_stop
+    exit 0  # skip daemon restart below
 fi
+
+[ "$DPKG_MAINTSCRIPT_PACKAGE" ] && db_stop
 
 #DEBHELPER#
 
+exit 0

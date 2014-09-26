@@ -6,9 +6,26 @@ use lib 't';
 use TestLib;
 use POSIX qw/setlocale LC_ALL LC_MESSAGES/;
 
-use Test::More tests => 8 + ($#MAJORS+1)*7;
+use Test::More tests => $PgCommon::rpm ? (8*@MAJORS) : (12 + 7*@MAJORS);
 
-print "Info: PostgreSQL versions installed: @MAJORS\n";
+note "PostgreSQL versions installed: @MAJORS\n";
+
+if ($PgCommon::rpm) {
+    foreach my $v (@MAJORS) {
+        my $vv = $v;
+        $vv =~ s/\.//;
+
+        ok ((rpm_installed "postgresql$vv"),          "postgresql$vv installed");
+        ok ((rpm_installed "postgresql$vv-libs"),     "postgresql$vv-libs installed");
+        ok ((rpm_installed "postgresql$vv-server"),   "postgresql$vv-server installed");
+        ok ((rpm_installed "postgresql$vv-contrib"),  "postgresql$vv-contrib installed");
+        ok ((rpm_installed "postgresql$vv-plperl"),   "postgresql$vv-plperl installed");
+        ok ((rpm_installed "postgresql$vv-plpython"), "postgresql$vv-plpython installed");
+        ok ((rpm_installed "postgresql$vv-pltcl"),    "postgresql$vv-pltcl installed");
+        ok ((rpm_installed "postgresql$vv-devel"),    "postgresql$vv-devel installed");
+    }
+    exit;
+}
 
 foreach my $v (@MAJORS) {
     ok ((deb_installed "postgresql-$v"), "postgresql-$v installed");
@@ -25,6 +42,7 @@ foreach my $v (@MAJORS) {
 }
 
 ok ((deb_installed 'libecpg-dev'), 'libecpg-dev installed');
+ok ((deb_installed 'logrotate'), 'logrotate installed');
 ok ((deb_installed 'procps'), 'procps installed');
 ok ((deb_installed 'netcat-openbsd'), 'netcat-openbsd installed');
 
@@ -35,7 +53,12 @@ ok ((setlocale(LC_MESSAGES, '') =~ /utf8|UTF-8/), 'system has a default UTF-8 lo
 ok (setlocale (LC_ALL, "ru_RU"), 'locale ru_RU exists');
 ok (setlocale (LC_ALL, "ru_RU.UTF-8"), 'locale ru_RU.UTF-8 exists');
 
+my $key_file = '/etc/ssl/private/ssl-cert-snakeoil.key';
+my $pem_file = '/etc/ssl/certs/ssl-cert-snakeoil.pem';
 ok ((getgrnam('ssl-cert'))[3] =~ /postgres/, 
     'user postgres in the UNIX group ssl-cert');
+ok (-e $key_file, "$key_file exists");
+is (exec_as ('postgres', "cat $key_file > /dev/null"), 0, "$key_file is readable for postgres");
+ok (-e $pem_file, "$pem_file exists");
 
 # vim: filetype=perl

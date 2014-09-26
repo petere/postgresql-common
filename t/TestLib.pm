@@ -20,14 +20,15 @@ use Test::More;
 
 our $VERSION = 1.00;
 our @ISA = ('Exporter');
-our @EXPORT = qw/ps ok_dir exec_as deb_installed is_program_out
-    like_program_out unlike_program_out pidof pid_env check_clean
-    @MAJORS $delay/;
+our @EXPORT = qw/ps ok_dir exec_as deb_installed rpm_installed package_version
+    version_ge is_program_out like_program_out unlike_program_out pidof pid_env check_clean
+    @ALL_MAJORS @MAJORS $delay/;
 
 use lib '/usr/share/postgresql-common';
 use PgCommon qw/get_versions change_ugid/;
 
-our @MAJORS = $ENV{PG_VERSIONS} ? split (/\s+/, $ENV{PG_VERSIONS}) : sort (get_versions());
+our @ALL_MAJORS = sort (get_versions()); # not affected by PG_VERSIONS/-v
+our @MAJORS = $ENV{PG_VERSIONS} ? split (/\s+/, $ENV{PG_VERSIONS}) : @ALL_MAJORS;
 our $delay = 500_000; # 500ms
 
 # called if a test fails; spawn a shell if the environment variable
@@ -54,6 +55,42 @@ sub deb_installed {
     close DPKG;
 
     return $result;
+}
+
+# Return whether a given rpm is installed.
+# Arguments: <rpm name>
+sub rpm_installed {
+    open (RPM, "rpm -qa $_[0] 2>/dev/null|") or die "call rpm: $!";
+    my $out = <RPM>; # returns void or the package name
+    close RPM;
+    return ($out =~ /./);
+}
+
+# Return a package version
+# Arguments: <package>
+sub package_version {
+    my $package = shift;
+    if ($PgCommon::rpm) {
+        return `rpm --queryformat '%{VERSION}' -q $package`;
+    } else {
+        my $version = `dpkg-query -f '\${Version}' --show $package`;
+        chomp $version;
+        return $version;
+    }
+}
+
+# Return whether a version is greater or equal to another one
+# Arguments: <ver1> <ver2>
+sub version_ge {
+    my ($v1, $v2) = @_;
+    use IPC::Open2;
+    open2(\*CHLD_OUT, \*CHLD_IN, 'sort', '-Vr');
+    print CHLD_IN "$v1\n";
+    print CHLD_IN "$v2\n";
+    close CHLD_IN;
+    my $v_ge = <CHLD_OUT>;
+    chomp $v_ge;
+    return $v_ge eq $v1;
 }
 
 # Return the user, group, and command line of running processes for the given

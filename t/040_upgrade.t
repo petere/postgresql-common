@@ -70,7 +70,7 @@ is_program_out 'nobody', 'psql test -c "CREATE FUNCTION inc2(integer) RETURNS in
     0, "CREATE FUNCTION\n", 'CREATE FUNCTION inc2';
 SKIP: {
     skip 'hardcoded library paths not supported by pg_upgrade', 2 if $upgrade_options =~ /upgrade/;
-    is_program_out 'postgres', "psql -c \"UPDATE pg_proc SET probin = '/usr/lib/postgresql/$MAJORS[0]/lib/plpgsql.so' where proname = 'plpgsql_call_handler';\" test",
+    is_program_out 'postgres', "psql -c \"UPDATE pg_proc SET probin = '$PgCommon::binroot$MAJORS[0]/lib/plpgsql.so' where proname = 'plpgsql_call_handler';\" test",
 	0, "UPDATE 1\n", 'hardcoding plpgsql lib path';
 }
 is_program_out 'nobody', 'psql test -c "CREATE FUNCTION inc3(integer) RETURNS integer LANGUAGE plpgsql AS \'BEGIN RETURN \$1 + 3; END;\';"',
@@ -108,10 +108,10 @@ like_program_out 'nobody', 'pg_lsclusters -h', 0,
 
 # Check SELECT in original cluster
 my $select_old;
-is ((exec_as 'nobody', 'psql -tAc "SELECT * FROM phone ORDER BY name" test', $select_old), 0, 'SELECT succeeds');
+is ((exec_as 'nobody', 'psql -tAc "SELECT * FROM phone ORDER BY name" test', $select_old), 0, 'SELECT in original cluster succeeds');
 is ($$select_old, 'Alice|2
 Bob|1
-', 'check SELECT output');
+', 'check SELECT output in original cluster');
 
 # create inaccessible cwd, to check for confusing error messages
 rmdir '/tmp/pgtest';
@@ -124,14 +124,14 @@ my $psql = fork;
 if (!$psql) {
     my @pw = getpwnam 'nobody';
     change_ugid $pw[2], $pw[3];
-    dup2(POSIX::open('/dev/null', POSIX::O_WRONLY), 1);
     # suppress 'could not change directory to "/tmp/pgtest"'
-    dup2(POSIX::open('/dev/null', POSIX::O_WRONLY), 2);
-    exec 'psql', 'template1' or die "could not exec psql process: $!";
+    chdir '/tmp';
+    # pg_upgradecluster below will timeout after 5s
+    exec 'psql', '-c', 'select pg_sleep(15)', 'postgres' or die "could not exec psql process: $!";
 }
 usleep $delay;
 
-like_program_out 0, "pg_upgradecluster $upgrade_options $MAJORS[0] upgr", 1, 
+like_program_out 0, "pg_upgradecluster -v $MAJORS[-1] $upgrade_options $MAJORS[0] upgr", 1, 
     qr/Error: Could not stop old cluster/,
     'pg_upgradecluster fails on busy cluster';
 like_program_out 'nobody', 'pg_lsclusters -h', 0,
@@ -150,7 +150,7 @@ is ((system "pg_ctlcluster $MAJORS[0] upgr start"), 0, 'Starting upgr cluster');
 
 # Upgrade to latest version
 my $outref;
-is ((exec_as 0, "(pg_upgradecluster $upgrade_options $MAJORS[0] upgr | sed -e 's/^/STDOUT: /')", $outref, 0), 0, 'pg_upgradecluster succeeds');
+is ((exec_as 0, "(pg_upgradecluster -v $MAJORS[-1] $upgrade_options $MAJORS[0] upgr | sed -e 's/^/STDOUT: /')", $outref, 0), 0, 'pg_upgradecluster succeeds');
 like $$outref, qr/Starting target cluster/, 'pg_upgradecluster reported cluster startup';
 like $$outref, qr/Success. Please check/, 'pg_upgradecluster reported successful operation';
 my @err = grep (!/^STDOUT: /, split (/\n/, $$outref));

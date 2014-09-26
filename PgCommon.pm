@@ -1,7 +1,7 @@
 # Common functions for the postgresql-common framework
 #
 # (C) 2008-2009 Martin Pitt <mpitt@debian.org>
-# (C) 2012-2013 Christoph Berg <myon@debian.org>
+# (C) 2012-2014 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -29,10 +29,11 @@ our @EXPORT = qw/error user_cluster_map get_cluster_port set_cluster_port
     get_program_path cluster_info get_versions get_newest_version version_exists
     get_version_clusters next_free_port cluster_exists install_file
     change_ugid config_bool get_db_encoding get_db_locales get_cluster_locales
-    get_cluster_databases read_cluster_conf_file read_pg_hba/;
-our @EXPORT_OK = qw/$confroot read_conf_file get_conf_value set_conf_value
-    disable_conf_value replace_conf_value cluster_data_directory
-    get_file_device read_pidfile check_pidfile_running/;
+    get_cluster_databases read_cluster_conf_file read_pg_hba read_pidfile/;
+our @EXPORT_OK = qw/$confroot $binroot $rpm quote_conf_value read_conf_file get_conf_value
+    set_conf_value set_conffile_value disable_conffile_value disable_conf_value
+    replace_conf_value cluster_data_directory get_file_device
+    check_pidfile_running/;
 
 # Print an error message to stderr and exit with status 1
 sub error {
@@ -50,7 +51,11 @@ if ($ENV{'PGSYSCONFDIR'}) {
     ($common_confdir) = $ENV{'PGSYSCONFDIR'} =~ /(.*)/; # untaint
 }
 my $mapfile = "$common_confdir/user_clusters";
-my $binroot = "/usr/local/opt/postgresql";
+our $binroot = "/usr/lib/postgresql/";
+#redhat# $binroot = "/usr/pgsql-";
+$binroot = "/usr/local/opt/postgresql-";
+our $rpm = 0;
+#redhat# $rpm = 1;
 my $defaultport = 5432;
 
 {
@@ -93,6 +98,16 @@ sub config_bool {
     return undef;
 }
 
+# Quotes a value with single quotes
+# Arguments: <value>
+# Returns: quoted string
+sub quote_conf_value ($) {
+    my $value = shift;
+    return $value if ($value =~ /^-?[\w.]+$/);
+    $value =~ s/'/''/g;
+    return "'$value'";
+}
+
 # Read a 'var = value' style configuration file and return a hash with the
 # values. Error out if the file cannot be read.
 # If the file name ends with '.conf', the keys will be normalized to lower case
@@ -125,12 +140,13 @@ sub read_conf_file {
 		    $conf{$k} = $v;
 		}
 
-            } elsif (/^\s*([a-zA-Z0-9_.-]+)\s*(?:=|\s)\s*'((?:[^']|(?:(?<=\\)'))*)'\s*(?:#.*)?$/i) {
+            } elsif (/^\s*([a-zA-Z0-9_.-]+)\s*(?:=|\s)\s*'((?:[^']|''|(?:(?<=\\)'))*)'\s*(?:#.*)?$/i) {
                 # string value
                 my $v = $2;
                 my $k = $1;
 		$k = lc $k if $_[0] =~ /\.conf$/;
                 $v =~ s/\\(.)/$1/g;
+                $v =~ s/''/'/g;
                 $conf{$k} = $v;
             } elsif (/^\s*([a-zA-Z0-9_.-]+)\s*(?:=|\s)\s*(-?[\w.]+)\s*(?:#.*)?$/i) {
                 # simple value
@@ -139,6 +155,7 @@ sub read_conf_file {
 		$k = lc $k if $_[0] =~ /\.conf$/;
                 $conf{$k} = $v;
             } else {
+                chomp;
                 error "Invalid line $. in $_[0]: »$_«";
             }
         }
@@ -170,17 +187,10 @@ sub get_conf_value {
 }
 
 # Set parameter of a PostgreSQL configuration file.
-# Arguments: <version> <cluster> <config file name> <parameter name> <value>
-sub set_conf_value {
-    my $fname = "$confroot/$_[0]/$_[1]/$_[2]";
-    my $value;
+# Arguments: <config file name> <parameter name> <value>
+sub set_conffile_value {
+    my ($fname, $key, $value) = ($_[0], $_[1], quote_conf_value($_[2]));
     my @lines;
-
-    if ($_[4] =~ /^-?[\w.]+$/) {
-	$value = $_[4];
-    } else {
-	$value = "'$_[4]'";
-    }
 
     # read configuration file lines
     open (F, $fname) or die "Error: could not open $fname for reading";
@@ -190,8 +200,8 @@ sub set_conf_value {
     my $found = 0;
     # first, search for an uncommented setting
     for (my $i=0; $i <= $#lines; ++$i) {
-	if ($lines[$i] =~ /^\s*($_[3])(\s*(?:=|\s)\s*)\w+\b((?:\s*#.*)?)/i or
-	    $lines[$i] =~ /^\s*($_[3])(\s*(?:=|\s)\s*)'[^']*'((?:\s*#.*)?)/i) {
+	if ($lines[$i] =~ /^\s*($key)(\s*(?:=|\s)\s*)\w+\b((?:\s*#.*)?)/i or
+	    $lines[$i] =~ /^\s*($key)(\s*(?:=|\s)\s*)'[^']*'((?:\s*#.*)?)/i) {
 	    $lines[$i] = "$1$2$value$3\n";
 	    $found = 1;
 	    last;
@@ -202,8 +212,8 @@ sub set_conf_value {
     # of appending
     if (!$found) {
 	for (my $i=0; $i <= $#lines; ++$i) {
-	    if ($lines[$i] =~ /^\s*#\s*($_[3])(\s*(?:=|\s)\s*)\w+\b((?:\s*#.*)?)/i or
-		$lines[$i] =~ /^\s*#\s*($_[3])(\s*(?:=|\s)\s*)'[^']*'((?:\s*#.*)?)/i) {
+	    if ($lines[$i] =~ /^\s*#\s*($key)(\s*(?:=|\s)\s*)\w+\b((?:\s*#.*)?)/i or
+		$lines[$i] =~ /^\s*#\s*($key)(\s*(?:=|\s)\s*)'[^']*'((?:\s*#.*)?)/i) {
 		$lines[$i] = "$1$2$value$3\n";
 		$found = 1;
 		last;
@@ -212,7 +222,7 @@ sub set_conf_value {
     }
 
     # not found anywhere, append it
-    push (@lines, "$_[3] = $value\n") unless $found;
+    push (@lines, "$key = $value\n") unless $found;
 
     # write configuration file lines
     open (F, ">$fname.new") or die "Error: could not open $fname.new for writing";
@@ -224,17 +234,22 @@ sub set_conf_value {
     # copy permissions
     my @st = stat $fname or die "stat: $!";
     chown $st[4], $st[5], "$fname.new"; # might fail as non-root
-    chmod $st[2], "$fname.new" or die "chmod: $1";
+    chmod $st[2], "$fname.new" or die "chmod: $!";
 
-    rename "$fname.new", "$fname";
+    rename "$fname.new", "$fname" or die "rename $fname.new $fname: $!";
+}
+
+# Set parameter of a PostgreSQL cluster configuration file.
+# Arguments: <version> <cluster> <config file name> <parameter name> <value>
+sub set_conf_value {
+    return set_conffile_value "$confroot/$_[0]/$_[1]/$_[2]", $_[3], $_[4];
 }
 
 # Disable a parameter in a PostgreSQL configuration file by prepending it with
 # a '#'. Appends an optional explanatory comment <reason> if given.
-# Arguments: <version> <cluster> <config file name> <parameter name> <reason>
-sub disable_conf_value {
-    my $fname = "$confroot/$_[0]/$_[1]/$_[2]";
-    my $value;
+# Arguments: <config file name> <parameter name> <reason>
+sub disable_conffile_value {
+    my ($fname, $key, $reason) = @_;
     my @lines;
 
     # read configuration file lines
@@ -244,10 +259,9 @@ sub disable_conf_value {
 
     my $changed = 0;
     for (my $i=0; $i <= $#lines; ++$i) {
-	if ($lines[$i] =~ /^\s*$_[3]\s*(?:=|\s)/i) {
-	    $lines[$i] = '#'.$lines[$i];
-	    chomp $lines[$i];
-            $lines[$i] .= ' #'.$_[4]."\n" if $_[4];
+	if ($lines[$i] =~ /^\s*$key\s*(?:=|\s)/i) {
+            $lines[$i] =~ s/^/#/;
+            $lines[$i] =~ s/$/ #$reason/ if $reason;
             $changed = 1;
 	    last;
 	}
@@ -268,6 +282,13 @@ sub disable_conf_value {
 
 	rename "$fname.new", "$fname";
     }
+}
+
+# Disable a parameter in a PostgreSQL cluster configuration file by prepending
+# it with a '#'. Appends an optional explanatory comment <reason> if given.
+# Arguments: <version> <cluster> <config file name> <parameter name> <reason>
+sub disable_conf_value {
+    return disable_conffile_value "$confroot/$_[0]/$_[1]/$_[2]", $_[3], $_[4];
 }
 
 # Replace a parameter in a PostgreSQL configuration file. The old parameter is
@@ -363,6 +384,7 @@ sub get_cluster_socketdir {
     $socketdir =~ s/\s*,.*// if ($socketdir); # ignore additional directories for now
     return $socketdir if $socketdir;
 
+    #redhat# return '/tmp'; # RedHat PGDG packages default to /tmp
     # try to determine whether this is a postgres owned cluster and we default
     # to /var/run/postgresql
     $socketdir = '/var/run/postgresql';
@@ -398,7 +420,7 @@ sub set_cluster_socketdir {
 # Arguments: <program name> <version>
 sub get_program_path {
     return '' unless defined($_[0]) && defined($_[1]);
-    my $path = "$binroot-$_[1]/bin/$_[0]";
+    my $path = "$binroot$_[1]/bin/$_[0]";
     ($path) = $path =~ /(.*)/; #untaint
     return $path if -x $path;
     return '';
@@ -521,6 +543,7 @@ sub read_pidfile {
     if (open PIDFILE, $_[0]) {
 	my $pid = <PIDFILE>;
 	close PIDFILE;
+        return undef unless ($pid);
         chomp $pid;
         ($pid) = $pid =~ /^(\d+)\s*$/; # untaint
 	return $pid;
@@ -561,20 +584,24 @@ sub check_pidfile_running {
     return undef;
 }
 
-# Return a hash with information about a specific cluster.
+# Return a hash with information about a specific cluster (which needs to exist).
 # Arguments: <version> <cluster name>
 # Returns: information hash (keys: pgdata, port, running, logfile [unless it
 #          has a custom one], configdir, owneruid, ownergid, socketdir,
 #          statstempdir)
 sub cluster_info {
-    error 'cluster_info must be called with <version> <cluster> arguments' unless $_[0] && $_[1];
+    my ($v, $c) = @_;
+    error 'cluster_info must be called with <version> <cluster> arguments' unless ($v and $c);
 
     my %result;
-    $result{'configdir'} = "$confroot/$_[0]/$_[1]";
-    my %postgresql_conf = read_cluster_conf_file $_[0], $_[1], 'postgresql.conf';
-    $result{'pgdata'} = cluster_data_directory $_[0], $_[1], \%postgresql_conf;
+    $result{'configdir'} = "$confroot/$v/$c";
+    error 'cluster_info called on non-existing cluster $v $c' unless (-e "$result{configdir}/postgresql.conf");
+    $result{'configuid'} = (stat "$result{configdir}/postgresql.conf")[4];
+
+    my %postgresql_conf = read_cluster_conf_file $v, $c, 'postgresql.conf';
+    $result{'pgdata'} = cluster_data_directory $v, $c, \%postgresql_conf;
     $result{'port'} = $postgresql_conf{'port'} || $defaultport;
-    $result{'socketdir'} = get_cluster_socketdir  $_[0], $_[1];
+    $result{'socketdir'} = get_cluster_socketdir  $v, $c;
     $result{'statstempdir'} = $postgresql_conf{'stats_temp_directory'};
 
     # if we can determine the running status with the pid file, prefer that
@@ -586,7 +613,7 @@ sub cluster_info {
     # otherwise fall back to probing the port; this is unreliable if the port
     # was changed in the configuration file in the meantime
     if (!defined ($result{'running'})) {
-	$result{'running'} = cluster_port_running ($_[0], $_[1], $result{'port'});
+	$result{'running'} = cluster_port_running ($v, $c, $result{'port'});
     }
 
     if ($result{'pgdata'}) {
@@ -594,35 +621,43 @@ sub cluster_info {
             (stat $result{'pgdata'})[4,5];
         $result{'recovery'} = -e "$result{'pgdata'}/recovery.conf";
     }
-    $result{'start'} = get_cluster_start_conf $_[0], $_[1];
+    $result{'start'} = get_cluster_start_conf $v, $c;
 
-    # default log file (only if not expliticly configured in postgresql.conf)
-    unless (exists $postgresql_conf{'log_filename'} || 
-	exists $postgresql_conf{'log_directory'} ||
-	(defined $postgresql_conf{'log_destination'} &&
-	    $postgresql_conf{'log_destination'} eq 'syslog')) {
+    # default log file (only if not explicitly configured in postgresql.conf)
+    unless (config_bool ($postgresql_conf{logging_collector}) or
+        ($postgresql_conf{'log_destination'} || '') =~ /syslog/) {
         my $log_symlink = $result{'configdir'} . "/log";
         if (-l $log_symlink) {
             ($result{'logfile'}) = readlink ($log_symlink) =~ /(.*)/; # untaint
         } else {
-            $result{'logfile'} = "/var/log/postgresql/postgresql-$_[0]-$_[1].log";
+            $result{'logfile'} = "/var/log/postgresql/postgresql-$v-$c.log";
         }
+    } else {
+        $result{log_destination} = $postgresql_conf{log_destination};
+        $result{log_directory} = $postgresql_conf{log_directory};
+        $result{log_filename} = $postgresql_conf{log_filename};
     }
 
     # autovacuum defaults to on since 8.3
-    $result{'avac_enable'} = config_bool $postgresql_conf{'autovacuum'} || ($_[0] >= '8.3');
-    
+    $result{'avac_enable'} = config_bool $postgresql_conf{'autovacuum'} || ($v >= '8.3');
+
     return %result;
 }
 
 # Return an array of all available PostgreSQL versions
 sub get_versions {
     my @versions = ();
-    if (opendir (D, dirname($binroot))) {
+    my $dir = $binroot;
+    #redhat# $dir = '/usr';
+    $dir = '/usr/local/opt';
+    if (opendir (D, $dir)) {
 	my $entry;
         while (defined ($entry = readdir D)) {
-            next if $entry eq '.' || $entry eq '..' || $entry !~ /postgresql-\d+/;
-	    ($entry) = ($entry =~ /^postgresql-(\d+\.\d+)$/); # untaint
+            next if $entry eq '.' || $entry eq '..';
+            my $pfx = '';
+            #redhat# $pfx = "pgsql-";
+            $pfx = "postgresql-";
+            ($entry) = $entry =~ /^$pfx(\d+\.\d+)$/; # untaint
             push @versions, $entry if get_program_path ('psql', $entry);
         }
         closedir D;

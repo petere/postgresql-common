@@ -4,7 +4,7 @@
 # versions
 #
 # (C) 2010 Dimitri Fontaine <dfontaine@hi-media.com>
-# (C) 2011-2013 Christoph Berg <myon@debian.org>
+# (C) 2011-2014 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -18,8 +18,19 @@
 
 set -e
 
+VENVARGS=""
+while getopts "c:i:o:s" opt ; do
+    case $opt in
+	c|i|o) VENVARGS="$VENVARGS -$opt $OPTARG" ;;
+	s) VENVARGS="$VENVARGS -$opt" ;;
+	*) exit 1 ;;
+    esac
+done
+# shift away args
+shift $(($OPTIND - 1))
+
 action="$1"
-if [ -d "$2" ]; then # compat mode: $2 is source directory
+if [ -d "$2" ] && [ "$3" ]; then # compat mode: $2 is source directory
     srcdir="$2"
     shift
 else
@@ -92,6 +103,33 @@ loop() {
     echo "### done $1 ###"
 }
 
+installcheck() {
+    prepare_env $1
+
+    if [ "$target" ]; then # if target is given, use it, else stay in the top source dir
+	# if a Makefile was created by configure, use it, else the top level Makefile
+	[ -f $vtarget/Makefile ] || makefile="-f $srcdir/Makefile"
+	if ! pg_virtualenv $VENVARGS -v $1 \
+	    make -C $vtarget $makefile installcheck \
+		PG_CONFIG="$pgc" VPATH="$srcdir" srcdir="$srcdir" USE_PGXS=1; then
+	    if [ -r $vtarget/regression.diffs ]; then
+		echo "**** $vtarget/regression.diffs ****"
+		cat $vtarget/regression.diffs
+	    fi
+	    exit 1
+	fi
+    else
+	if ! pg_virtualenv $VENVARGS -v $1 \
+	    make installcheck PG_CONFIG="$pgc" srcdir="$srcdir" USE_PGXS=1; then
+	    if [ -r regression.diffs ]; then
+		echo "**** regression.diffs ****"
+		cat regression.diffs
+	    fi
+	    exit 1
+	fi
+    fi
+}
+
 versions() {
     [ -e /usr/share/postgresql-common/supported-versions ] ||
 	die "/usr/share/postgresql-common/supported-versions not found"
@@ -115,9 +153,53 @@ versions() {
     done < debian/pgversions
 }
 
-VERSIONS=`versions`
+gencontrol() {
+    tmpcontrol=$(mktemp debian/control.XXXXXX)
+    trap "rm -f $tmpcontrol" 0 2 3 15
+    grep-dctrl -vP PGVERSION debian/control.in > $tmpcontrol
+    for v in $(versions); do
+        grep-dctrl -P PGVERSION debian/control.in | sed -e "s:PGVERSION:$v:" >> $tmpcontrol
+    done
+}
 
-for v in $VERSIONS
+# when a version is included in the action, just act on this one (this is
+# useful if some extra work needs to be done per version, so the loop over
+# supported-versions needs to be in the script calling pg_buildext)
+
+case $action in
+    configure-*|build-*|install-*|clean-*|installcheck-*)
+	a=${action%%-*}
+	v=${action##$a-}
+	echo "### $a $v ###"
+	$a $v
+	exit
+	;;
+
+    checkcontrol)
+        gencontrol
+        if ! diff -u debian/control $tmpcontrol; then
+            if [ "${PG_UPDATECONTROL:-no}" != "no" ] || head -1 debian/changelog | egrep -q -- '-backports|-pgdg|-pgapt'; then
+                echo "Notice: Updating debian/control from debian/control.in."
+                mv $tmpcontrol debian/control
+                exit
+            fi
+            echo "Error: debian/control needs updating from debian/control.in. Run 'pg_buildext updatecontrol'."
+            echo "If you are seeing this message in a buildd log, a sourceful upload is required."
+            exit 1
+        fi
+        exit
+        ;;
+
+    updatecontrol)
+        gencontrol
+        mv $tmpcontrol debian/control
+        exit
+        ;;
+esac
+
+# loop over versions
+
+for v in $(versions)
 do
     case "$action" in
 	"supported-versions")
@@ -125,13 +207,18 @@ do
 	    ;;
 
 	configure|build|install|clean|loop)
-	    [ "$target" ] || die "syntax: pg_buildext $action <srcdir> <target> ..."
-	    # be verbose?
+	    [ "$target" ] || die "syntax: pg_buildext $action [...]"
+	    echo "### $action $v ###"
+	    $action $v
+	    ;;
+
+	installcheck)
+	    echo "### $action $v ###"
 	    $action $v
 	    ;;
 
 	*)
-	    die "unsupported $action."
+	    die "unsupported $action"
 	    ;;
     esac
 done

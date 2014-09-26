@@ -6,7 +6,7 @@ require File::Temp;
 
 use lib 't';
 use TestLib;
-use Test::More tests => 155;
+use Test::More tests => 158;
 
 use lib '/usr/share/postgresql-common';
 use PgCommon;
@@ -62,10 +62,11 @@ like_program_out 0, "pg_createcluster $version test -p 5432", 1,
     'pg_createcluster -p checks that port is already used';
 
 # chown cluster to an invalid user to test error
-(system "chown -R 99 /var/lib/postgresql/$version/main") == 0 or die "chown failed: $!";
+my $badid = 98;
+(system "chown -R $badid /var/lib/postgresql/$version/main") == 0 or die "chown failed: $!";
 is ((system "pg_ctlcluster $version main start 2>/dev/null"), 256,
     'pg_ctlcluster fails on invalid cluster owner uid');
-(system "chown -R postgres:99 /var/lib/postgresql/$version/main") == 0 or die "chown failed: $!";
+(system "chown -R postgres:$badid /var/lib/postgresql/$version/main") == 0 or die "chown failed: $!";
 is ((system "pg_ctlcluster $version main start 2>/dev/null"), 256,
     'pg_ctlcluster as root fails on invalid cluster owner gid');
 is ((exec_as 'postgres', "pg_ctlcluster $version main start"), 1,
@@ -80,7 +81,7 @@ ok_dir $socketdir, ['.s.PGSQL.5432', '.s.PGSQL.5432.lock'], "Socket is in $socke
 
 # stop cluster, check sockets
 ok ((system "pg_ctlcluster $version main stop") == 0,
-    'cluster stops after removing unix_socket_dir');
+    'cluster stops with custom unix_socket_dir');
 ok_dir $socketdir, [], "No sockets in $socketdir after stopping cluster";
 
 # remove default socket dir and check that the socket defaults to
@@ -96,8 +97,12 @@ close F;
 
 ok ((system "pg_ctlcluster $version main start") == 0,
     'cluster starts after removing unix_socket_dir');
-ok_dir '/var/run/postgresql', ['.s.PGSQL.5432', '.s.PGSQL.5432.lock', "$version-main.pid"], 
-    'Socket is in default dir /var/run/postgresql';
+if ($PgCommon::rpm) {
+    ok ((grep { $_ eq '.s.PGSQL.5432' } @{TestLib::dircontent('/tmp')}) == 1, 'Socket is in /tmp');
+} else {
+    ok_dir '/var/run/postgresql', ['.s.PGSQL.5432', '.s.PGSQL.5432.lock', "$version-main.pid"], 
+        'Socket is in default dir /var/run/postgresql';
+}
 ok_dir $socketdir, [], "No sockets in $socketdir";
 
 # server should not stop with corrupt file
@@ -153,6 +158,12 @@ create_pidfile '99998';
 is_program_out 'postgres', "pg_ctlcluster --force $version main stop", 2,
     "Removed stale pid file.\nCluster is not running.\n", 
     'pg_ctlcluster --force stop succeeds with stale PID file';
+ok (! -e $pf, 'pid file was cleaned up');
+
+create_pidfile '';
+is_program_out 'postgres', "pg_ctlcluster --force $version main stop", 2,
+    "Removed stale pid file.\nCluster is not running.\n", 
+    'pg_ctlcluster stop succeeds with empty PID file';
 ok (! -e $pf, 'pid file was cleaned up');
 
 # corrupt PID file while server is down
@@ -257,7 +268,7 @@ is ((exec_as 'postgres', "pg_ctlcluster $version main start"), 0,
     'pg_ctlcluster: main cluster on conflicting port starts');
 
 # clusters can run side by side on different socket directories
-set_cluster_socketdir $version, 'other', '/tmp';
+set_cluster_socketdir $version, 'other', $socketdir;
 PgCommon::set_conf_value $version, 'other', 'postgresql.conf',
     'listen_addresses', ''; # otherwise they will conflict on TCP socket
 is ((exec_as 'postgres', "pg_ctlcluster $version other start"), 0,
@@ -265,7 +276,7 @@ is ((exec_as 'postgres', "pg_ctlcluster $version other start"), 0,
 is ((exec_as 'postgres', "pg_ctlcluster $version other stop"), 0);
 
 # ... but will give an error when running on the same port
-set_cluster_socketdir $version, 'other', '/var/run/postgresql';
+set_cluster_socketdir $version, 'other', $PgCommon::rpm ? '/tmp' : '/var/run/postgresql';
 like_program_out 'postgres', "pg_ctlcluster $version other start", 1,
     qr/Port conflict:.*port 5432/,
     'pg_ctlcluster other cluster fails on conflicting port and same socket dir';

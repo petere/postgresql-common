@@ -2,7 +2,12 @@
 # package init.d scripts. It is usually included by
 # /etc/init.d/postgresql
 
-. /lib/lsb/init-functions
+init_functions=/lib/lsb/init-functions
+#redhat# init_functions=/usr/share/postgresql-common/init-functions-compat
+. $init_functions
+
+PGBINROOT="/usr/lib/postgresql/"
+#redhat# PGBINROOT="/usr/pgsql-"
 
 # do pg_ctlcluster action $1 to all clusters of version $2 with command
 # description $3; output according to Debian Policy for init scripts
@@ -11,7 +16,7 @@ do_ctl_all() {
     [ "$2" ] || { echo "Error: invalid version '$2'" >&2; exit 1; }
     [ -d "/etc/postgresql/$2" ] || return 0
     [ "$(ls /etc/postgresql/$2)" ] || return 0
-    [ -x "/usr/lib/postgresql/$2/bin/postmaster" ] || return 0
+    [ -x "$PGBINROOT$2/bin/postmaster" ] || return 0
 
     status=0
     log_daemon_msg "$3"
@@ -51,9 +56,10 @@ do_ctl_all() {
 start() {
     # create socket directory
     if [ -d /var/run/postgresql ]; then
-        chmod 2775 /var/run/postgresql
+	chmod 2775 /var/run/postgresql
     else
 	install -d -m 2775 -o postgres -g postgres /var/run/postgresql
+	[ -x /sbin/restorecon ] && restorecon -R /var/run/postgresql || true
     fi
 
     do_ctl_all start "$1" "Starting PostgreSQL $1 database server"
@@ -87,9 +93,17 @@ status() {
 # return all installed versions which do not have their own init script
 get_versions() {
     versions=''
-    local v
-    for v in `ls /usr/lib/postgresql/ 2>/dev/null`; do
-	if [ -x /usr/lib/postgresql/$v/bin/pg_ctl ] && [ ! -x /etc/init.d/postgresql-$v ]; then
+    local v dir skipinit
+
+    skipinit=continue
+    #redhat# skipinit=true # RedHat systems will have /etc/init.d/postgresql-* provided by the yum.pg.o package
+    dir=$PGBINROOT
+    #redhat# dir="-d /usr/pgsql-*"
+
+    for v in `ls $dir 2>/dev/null`; do
+        #redhat# v=${v#*-}
+        [ -x /etc/init.d/postgresql-$v ] && $skipinit
+        if [ -x $PGBINROOT$v/bin/pg_ctl ]; then
 	    versions="$versions $v"
 	fi
     done

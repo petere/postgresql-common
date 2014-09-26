@@ -4,7 +4,7 @@
 # tmpfses, so does not interfere with installed clusters.
 #
 # (C) 2005-2012 Martin Pitt <mpitt@debian.org>
-# (C) 2012-2013 Christoph Berg <myon@debian.org>
+# (C) 2012-2014 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -18,14 +18,6 @@
 
 set -e
 
-# call ourselves through unshare in a way that keeps normal stdin
-if [ -z "$UNSHARED" ]; then
-    UNSHARED=1 exec unshare -uimn -- "$0" "$@"
-fi
-
-# unshared program starts here
-set -e
-
 # default config
 TESTSDIR="$(dirname $0)/t"
 : ${PG_UMASKS="022 077"}
@@ -34,47 +26,69 @@ help ()
 {
     echo "postgresql-common testsuite"
     echo "Syntax: $0 [options] [test ...]"
+    echo "    -f number        run tests starting at this number"
+    echo "    -i               install packages for versions specified by -v"
+    echo "    -s               start a shell in the testbed on failure"
     echo "    -u 'umask ...'   umasks to run testsuite with [default: 022 077]"
     echo "    -v 'version ...' PostgreSQL versions to test [default: client versions installed]"
     exit ${1:-0}
 }
 
 # option parsing
-while getopts "hu:v:" opt ; do
+while getopts "hf:isu:v:" opt ; do
     case $opt in
+        f) FROM="$OPTARG" ;;
+        i) INSTALL=1 ;;
         h) help ;;
+        s) RUN_SHELL=1 ;;
         u) PG_UMASKS="$OPTARG" ;;
         v) export PG_VERSIONS="$OPTARG" ;; # used in t/TestLib.pm
         *) help 1 ;;
     esac
 done
-# shift away args
-shift $(($OPTIND - 1))
 
 if [ "$(id -u)" != 0 ]; then
     echo "Error: this test suite needs to be run as root" >&2
     exit 1
 fi
 
-# install locales; this happens differently on Debian and Ubuntu
-if [ -e /etc/locale.gen ]; then
-    # Debian
-    while read locale ; do
-	if ! grep -q "^$locale\$" /etc/locale.gen ; then
-	    echo "$locale" >> /etc/locale.gen
-	    run=1
-	fi
-    done <<-EOF
-	en_US.UTF-8 UTF-8
-	ru_RU ISO-8859-5
-	ru_RU.UTF-8 UTF-8
-EOF
-    [ "$run" ] && locale-gen
-else
-    # Ubuntu
-    # locale-gen will skip existing locales, so just call it for all here
-    locale-gen en_US.UTF-8 ru_RU ru_RU.UTF-8
+# install packages for versions specified by -v
+# needs network for apt, so run before unshare
+if [ "${INSTALL:-}" ] && [ -z "${UNSHARED:-}" ]; then
+    for v in $PG_VERSIONS; do
+        apt-get install -y postgresql-contrib-$v \
+            postgresql-plperl-$v \
+            postgresql-plpython-$v \
+            postgresql-plpython3-$v \
+            postgresql-pltcl-$v \
+            postgresql-server-dev-$v
+    done
+    apt-get install -y libecpg-dev \
+        locales \
+        logrotate \
+        procps \
+        netcat-openbsd \
+        hunspell-en-us
 fi
+# requirements on RedHat:
+# perl-Test-Simple perl-Time-HiRes
+
+# re-exec ourselves through unshare
+if [ -z "$UNSHARED" ]; then
+    UNSHARED=1 exec unshare -uimn -- "$0" "$@"
+fi
+
+# shift away args
+shift $(($OPTIND - 1))
+
+# use the local pgcommon.sh (either in the build tree or /usr/share/postgresql-common)
+. ./pgcommon.sh
+
+# install locales
+locale_gen \
+    en_US.UTF-8 UTF-8 \
+    ru_RU ISO-8859-5 \
+    ru_RU.UTF-8 UTF-8
 
 # stop currently running clusters
 if [ -x "/etc/init.d/postgresql" ]; then
@@ -83,8 +97,10 @@ fi
 
 # let everything happen in overlay tmpfses to avoid interfering with already
 # existing clusters; this also speeds up testing
+mount --make-rprivate / 2> /dev/null || : # reset / to private mounts (systemd changes this to shared)
+dirs="/etc/postgresql /etc/postgresql-common /var/lib/postgresql /var/log/postgresql /var/run/postgresql /dev/shm"
 created_dirs=""
-for d in /etc/postgresql /etc/postgresql-common /var/lib/postgresql /var/log/postgresql /var/run/postgresql; do
+for d in $dirs; do
     if ! [ -d $d ]; then
         created_dirs="$created_dirs $d"
         mkdir -p $d
@@ -92,19 +108,32 @@ for d in /etc/postgresql /etc/postgresql-common /var/lib/postgresql /var/log/pos
     mount -n -t tmpfs -o mode=755 tmpfs $d
 done
 # clean up created directories after us
-if [ -n "$created_dirs" ]; then
-    trap "umount $created_dirs; rmdir --ignore-fail-on-non-empty -p $created_dirs" 0 HUP INT QUIT ILL ABRT PIPE TERM
-fi
+cleanup () {
+    umount $dirs
+    if [ "$created_dirs" ]; then
+        rmdir --ignore-fail-on-non-empty -p $created_dirs
+    fi
+}
+trap "cleanup" 0 HUP INT QUIT ILL ABRT PIPE TERM
 chown root:postgres /var/log/postgresql
 chmod 1775 /var/log/postgresql
 chown postgres:postgres /var/run/postgresql
 chmod 2775 /var/run/postgresql
+chmod 1777 /dev/shm
+
+# the RPM packages enable the logging_collector by default, which the testsuite
+# doesn't like. We disable it unconditionally here.
+echo "logging_collector = off" >> /etc/postgresql-common/createcluster.conf
 
 # reset core limit for pg_ctl tests
 ulimit -S -c 0
 
 # start localhost interface
-ifconfig lo up
+if [ -x /bin/ip ]; then
+    ip link set dev lo up || true
+else
+    ifconfig lo up || true
+fi
 
 # set environment
 unset TMPDIR
@@ -131,7 +160,16 @@ for U in $PG_UMASKS; do
     echo "====== Running all tests with $TYPE umask $U ======="
     umask $U
     for T; do
-        echo "=== Running test `basename $T`... ==="
-        perl $T
+        TBASE=${T##*/}
+        [ "$FROM" ] && [ "${TBASE%%_*}" -lt "$FROM" ] && continue
+        echo "=== Running test $TBASE ... ==="
+        perl $T || {
+            EXIT=$?
+            if [ "${RUN_SHELL:-}" ]; then
+                echo "*** $TBASE failed with status $EXIT, dropping you into a shell in the testbed ***"
+                ${SHELL:-/bin/sh}
+            fi
+            exit $EXIT
+        }
     done
 done

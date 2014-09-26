@@ -7,10 +7,14 @@ use File::Temp qw/tempdir/;
 use lib 't';
 use TestLib;
 
-use Test::More tests => ($#MAJORS == 0) ? 1 : 24;
+use Test::More tests => ($#MAJORS == 0 or $PgCommon::rpm) ? 1 : 24;
 
 if ($#MAJORS == 0) {
     pass 'only one major version installed, skipping upgrade tests';
+    exit 0;
+}
+if ($PgCommon::rpm) {
+    pass 'SSL certificates not handled on RedHat';
     exit 0;
 }
 
@@ -35,7 +39,7 @@ symlink $tempcrt, $oldcrt or die "symlink: $!";
 
 # Upgrade to latest version
 my $outref;
-is ((exec_as 0, "pg_upgradecluster $MAJORS[0] upgr", $outref, 0), 0, 'pg_upgradecluster succeeds');
+is ((exec_as 0, "pg_upgradecluster -v $MAJORS[-1] $MAJORS[0] upgr", $outref, 0), 0, 'pg_upgradecluster succeeds');
 like $$outref, qr/Starting target cluster/, 'pg_upgradecluster reported cluster startup';
 like $$outref, qr/Success. Please check/, 'pg_upgradecluster reported successful operation';
 
@@ -58,7 +62,7 @@ note "upgrade test: server.crt is a plain file";
 
 # Upgrade to latest version
 my $outref;
-is ((exec_as 0, "pg_upgradecluster $MAJORS[0] upgr", $outref, 0), 0, 'pg_upgradecluster succeeds');
+is ((exec_as 0, "pg_upgradecluster -v $MAJORS[-1] $MAJORS[0] upgr", $outref, 0), 0, 'pg_upgradecluster succeeds');
 like $$outref, qr/Starting target cluster/, 'pg_upgradecluster reported cluster startup';
 like $$outref, qr/Success. Please check/, 'pg_upgradecluster reported successful operation';
 

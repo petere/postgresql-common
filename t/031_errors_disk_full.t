@@ -6,7 +6,7 @@ require File::Temp;
 
 use lib 't';
 use TestLib;
-use Test::More tests => 16;
+use Test::More tests => 26;
 
 my $outref;
 
@@ -15,7 +15,9 @@ my $outref;
 my $cmd = <<EOF;
 exec 2>&1
 set -e
+mount --make-rprivate / 2> /dev/null || :
 mkdir -p /var/lib/postgresql
+trap "umount /var/lib/postgresql" 0 HUP INT QUIT ILL ABRT PIPE TERM
 mount -t tmpfs -o size=10000000 none /var/lib/postgresql
 # this is supposed to fail
 LC_MESSAGES=C pg_createcluster $MAJORS[-1] test && exit 1 || true
@@ -34,12 +36,16 @@ like $$outref, qr/No space left on device/i,
     'pg_createcluster fails due to insufficient disk space';
 like $$outref, qr/\nls><ls\n/, 'does not leave files behind';
 
+check_clean;
 
 # check disk full conditions on startup
 my $cmd = <<EOF;
 set -e
+mount --make-rprivate / 2> /dev/null || :
 export LC_MESSAGES=C
-mkdir -p /etc/postgresql /var/lib/postgresql /var/log/postgresql
+dirs="/etc/postgresql /var/lib/postgresql /var/log/postgresql"
+mkdir -p \$dirs
+trap "umount \$dirs" 0 HUP INT QUIT ILL ABRT PIPE TERM
 mount -t tmpfs -o size=1000000 none /etc/postgresql
 mount -t tmpfs -o size=50000000 none /var/lib/postgresql
 mount -t tmpfs -o size=1000000 none /var/log/postgresql
@@ -53,6 +59,8 @@ echo '-- end full lib --'
 echo '-- full lib log --'
 cat /var/log/postgresql/postgresql-$MAJORS[-1]-test.log
 echo '-- end full lib log --'
+rm /var/lib/postgresql/cruft
+pg_dropcluster $MAJORS[-1] test --stop
 EOF
 
 $result = exec_as 'root', "echo '$cmd' | unshare -m sh", $outref;

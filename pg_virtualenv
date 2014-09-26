@@ -1,11 +1,11 @@
-#!/bin/sh
+#!/bin/bash
 
 # Create a throw-away PostgreSQL environment for running regression tests. This
 # happens in a temp dir/on unshared tmpfses, so does not interfere with
 # existing clusters.
 #
 # (C) 2005-2012 Martin Pitt <mpitt@debian.org>
-# (C) 2012-2013 Christoph Berg <myon@debian.org>
+# (C) 2012-2014 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 
-set -eu
+set -e # no -u here as that breaks PGCONF_OPTS[@]
 
 case ${LD_PRELOAD:-} in
     *fakeroot*) NONROOT=1 ;;
@@ -40,21 +40,27 @@ help ()
     echo "    -v 'version ...'  list of PostgreSQL versions to run [default: latest]"
     echo "    -c 'options'      extra options to pass to pg_createcluster"
     echo "    -i 'initdb opts'  extra initdb options to pass to pg_createcluster"
+    echo "    -o 'guc=value'    postgresql.conf options to pass to pg_createcluster"
     echo "    -s                open a shell when command fails"
     exit ${1:-0}
 }
 
 # option parsing
+PGBINROOT="/usr/lib/postgresql/"
+#redhat# PGBINROOT="/usr/pgsql-"
 PG_VERSIONS=""
-while getopts "ac:i:hsv:" opt ; do
+PGCONF_OPTS=()
+while getopts "ac:i:ho:sv:" opt ; do
     case $opt in
-	a) for d in /usr/lib/postgresql/*/bin/pg_ctl; do
+	a) for d in $PGBINROOT*/bin/pg_ctl; do
 		# prepend version so latest ends up first (i.e. on port 5432)
-		PG_VERSIONS="$(basename ${d%%/bin/pg_ctl}) ${PG_VERSIONS:-}"
+                dir=${d%%/bin/pg_ctl}
+		PG_VERSIONS="${dir#$PGBINROOT} ${PG_VERSIONS:-}"
 	   done ;;
 	c) CREATE_OPTS="$OPTARG" ;;
 	i) INITDB_OPTS="$OPTARG" ;;
 	h) help ;;
+	o) PGCONF_OPTS+=("--pgoption" "$OPTARG") ;;
 	s) run_shell=1 ;;
 	v) PG_VERSIONS="$OPTARG" ;;
 	*) help 1 ;;
@@ -62,8 +68,9 @@ while getopts "ac:i:hsv:" opt ; do
 done
 if [ -z "$PG_VERSIONS" ]; then
     # use latest version
-    d=$(ls /usr/lib/postgresql/*/bin/pg_ctl | tail -1)
-    PG_VERSIONS="$(basename ${d%%/bin/pg_ctl})"
+    d=$(ls $PGBINROOT*/bin/pg_ctl | tail -1)
+    dir=${d%%/bin/pg_ctl}
+    PG_VERSIONS="${dir#$PGBINROOT}"
 fi
 # shift away args
 shift $(($OPTIND - 1))
@@ -94,6 +101,7 @@ if [ "${NONROOT:-}" ]; then
 else
     # let everything happen in overlay tmpfses to avoid interfering with already
     # existing clusters; this also speeds up testing
+    mount --make-rprivate / 2> /dev/null || : # reset / to private mounts (systemd changes this to shared)
     created_dirs=""
     for d in /etc/postgresql /var/lib/postgresql /var/log/postgresql /var/run/postgresql; do
 	if ! [ -d $d ]; then
@@ -136,7 +144,11 @@ else
     fi
 
     # start localhost interface
-    ifconfig lo up
+    if [ -x /bin/ip ]; then
+        ip link set dev lo up || true
+    else
+        ifconfig lo up || true
+    fi
 fi
 
 # create postgres environments
@@ -152,15 +164,19 @@ for v in $PG_VERSIONS; do
     # we chdir to / so programs don't throw "could not change directory to ..."
     (
 	cd /
+        case $v in
+            8*|9.0|9.1|9.2) : ;;
+            *) NOSYNC="--nosync" ;;
+        esac
 	pg_createcluster \
 	    ${NONROOT:+-d "$WORKDIR/data/$v/regress"} \
 	    ${NONROOT:+-l "$WORKDIR/log/postgresql-$v-regress.log"} \
-	    ${CREATE_OPTS:-} --start $v regress -- \
-	    --username="$PGUSER" --pwfile="$PWFILE" ${INITDB_OPTS:-}
+	    ${CREATE_OPTS:-} "${PGCONF_OPTS[@]}" $v regress -- \
+	    --username="$PGUSER" --pwfile="$PWFILE" $NOSYNC ${INITDB_OPTS:-}
 	# in fakeroot, the username will likely default to "postgres" otherwise
+	pg_ctlcluster -o '-F' $v regress start
     )
-    port=$(perl -lne 'print $1 if /^port = (\d+)/' \
-	${PG_CLUSTER_CONF_ROOT:-/etc/postgresql}/$v/regress/postgresql.conf)
+    port=$(pg_conftool -s $v regress show port)
 
     # record cluster information in service file
     cat >> $PGSYSCONFDIR/pg_service.conf <<EOF
@@ -181,7 +197,7 @@ case $PG_VERSIONS in
     *\ *) ;; # multiple versions: do not set PGPORT because that breaks --cluster
     *)
 	export PGPORT="$port" # will always be 5432 in root mode, but could differ otherwise
-	export PG_CONFIG="/usr/lib/postgresql/$PG_VERSIONS/bin/pg_config"
+	export PG_CONFIG="$PGBINROOT$PG_VERSIONS/bin/pg_config"
 	;;
 esac
 
@@ -194,8 +210,8 @@ if [ ${EXIT:-0} -gt 0 ]; then
     done
 
     if [ "${run_shell:-}" ]; then
-	echo "pg_virtualenv: command exited with status $?, dropping you into a shell"
-	$SHELL
+	echo "pg_virtualenv: command exited with status $EXIT, dropping you into a shell"
+	${SHELL:-/bin/sh}
     fi
 fi
 

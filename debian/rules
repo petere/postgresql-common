@@ -1,10 +1,5 @@
 #!/usr/bin/make -f
 
-POD2MAN=pod2man --center "Debian PostgreSQL infrastructure" -r "Debian"
-POD1PROGS=pg_wrapper pg_lsclusters
-POD1PROGS_POD=pg_buildext pg_virtualenv
-POD8PROGS=pg_ctlcluster pg_createcluster pg_dropcluster pg_upgradecluster pg_updatedicts
-
 VERSION := $(shell dpkg-parsechangelog | awk '/^Version:/ { print $$2 }')
 ifneq ($(findstring bpo,$(VERSION)),)
 	FLAVOR := debian-backports
@@ -16,24 +11,22 @@ endif
 SUPPORTED_VERSIONS := $(shell PG_SUPPORTED_VERSIONS="$(FLAVOR)" debian/supported-versions)
 DEFAULT_VER := $(lastword $(SUPPORTED_VERSIONS))
 
-LOGROTATE_VER := $(shell LC_ALL=C apt-cache policy logrotate | awk '/Candidate:/ { print $$2 }')
-LOGROTATE38 := $(shell dpkg --compare-versions $(LOGROTATE_VER) ge 3.8 && echo yes)
+# use dh_systemd_* only on recent dists that have dh-systemd (>= 1.19)
+ifneq ($(wildcard /usr/bin/dh_systemd_start),)
+WITH_SYSTEMD=--with systemd
+endif
 
 %:
-	dh "$@"
+	dh $@ $(WITH_SYSTEMD)
 
-version_info:
+override_dh_auto_configure:
 	@echo "### Building postgresql-common flavor $(FLAVOR)"
 	@echo "### Supported PostgreSQL versions: $(SUPPORTED_VERSIONS) (default version: $(DEFAULT_VER))"
-	@echo "### Logrotate version: $(LOGROTATE_VER), is >= 3.8: $(LOGROTATE38)"
-build build-arch build-indep: version_info
 
 override_dh_install:
 	dh_install
+	$(MAKE) -C systemd install DESTDIR=$(CURDIR)/debian/postgresql-common
 	install -m 644 -D debian/postgresql-common.sysctl debian/postgresql-common/etc/sysctl.d/30-postgresql-shm.conf
-	for p in $(POD1PROGS); do $(POD2MAN) --quotes=none --section 1 $$p > $$p.1 || exit 1; done
-	for p in $(POD1PROGS_POD); do $(POD2MAN) --quotes=none --section 1 $$p.pod > $$p.1 || exit 1; done
-	for p in $(POD8PROGS); do $(POD2MAN) --quotes=none --section 8 $$p > $$p.8 || exit 1; done
 ifneq ($(FLAVOR),default)
 	/bin/echo -e "# See /usr/share/postgresql-common/supported-versions for documentation of this file\n$(FLAVOR)" > debian/postgresql-client-common/etc/postgresql-common/supported_versions
 endif
@@ -49,29 +42,9 @@ override_dh_gencontrol:
 	dh_gencontrol -ppostgresql -ppostgresql-client -ppostgresql-doc -ppostgresql-contrib  -- \
 		-Vdefault-version="$(DEFAULT_VER)" -v'$(DEFAULT_VER)+$${source:Version}'
 
-ifeq ($(LOGROTATE38),yes)
-	dh_gencontrol -ppostgresql-common -- -Vcommon-breaks="logrotate (<< 3.8)"
-else
-	dh_gencontrol -ppostgresql-common -- -Vcommon-breaks="logrotate (>= 3.8)"
-endif
-
 ifeq ($(FLAVOR),pgdg)
 	# for apt.postgresql.org builds, pull in the repository key package
 	dh_gencontrol -ppostgresql-client-common -- -Vpgdg:Depends="pgdg-keyring"
 endif
 
 	dh_gencontrol --remaining-packages
-
-override_dh_installlogrotate:
-	dh_installlogrotate
-ifeq ($(LOGROTATE38),yes)
-	# logrotate >= 3.8 requires an additional "su" command which is not
-	# backportable, see #640493
-	echo "Fixing logrotate configuration for logrotate >= 3.8..."
-	sed -i '/^}/ i\       su root root' debian/postgresql-common/etc/logrotate.d/*
-endif
-
-override_dh_clean:
-	dh_clean
-	for p in $(POD1PROGS) $(POD1PROGS_POD); do rm -f $$p.1 || exit 1; done
-	for p in $(POD8PROGS); do rm -f $$p.8 || exit 1; done

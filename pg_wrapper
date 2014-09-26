@@ -4,7 +4,7 @@
 # /etc/postgresql-common/user_clusters.
 #
 # (C) 2005-2009 Martin Pitt <mpitt@debian.org>
-# (C) 2013 Christoph Berg <myon@debian.org>
+# (C) 2013-2014 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -48,6 +48,14 @@ for (my $i = 0; $i <= $#ARGV; ++$i) {
         error 'No cluster specified with --cluster' unless $cluster;
 
         splice @ARGV, $i, 2;
+        last;
+    } elsif ($ARGV[$i] =~ /^--cluster=(\d+\.\d)\/(.+)/) {
+        ($version, $cluster) = ($1, $2);
+        $host = undef; # --cluster overrides $PGHOST env var
+        error 'Invalid version specified with --cluster' unless version_exists $version;
+        error 'No cluster specified with --cluster' unless $cluster;
+
+        splice @ARGV, $i, 1;
         last;
     }
 
@@ -97,19 +105,21 @@ unless ($version) {
     }
 }
 
-error 'Invalid PostgreSQL cluster version' unless -d "/usr/lib/postgresql/$version";
+error 'Invalid PostgreSQL cluster version' unless -d "$PgCommon::binroot$version";
 my $cmdname = (split '/', $0)[-1];
 my $cmd;
 
 # for psql we always want the latest version, as this is backwards compatible
 # to every major version that that we support
-if ($cmdname =~ /^(psql|pg_isready)$/) {
+if ($cmdname eq 'pg_wrapper') {
+    error "pg_wrapper should not be called directly, but through a symlink";
+} elsif ($cmdname =~ /^(psql|pg_archivecleanup|pg_isready)$/) {
     $cmd = get_program_path ($cmdname, get_newest_version);
 } else {
     $cmd = get_program_path ($cmdname, $version);
 }
 
-error "pg_wrapper: $cmdname was not found in /usr/lib/postgresql/$version/bin" unless $cmd;
+error "pg_wrapper: $cmdname was not found in $PgCommon::binroot$version/bin" unless $cmd;
 unshift @ARGV, $cmd;
 exec @ARGV;
 
@@ -180,7 +190,7 @@ will be selected.
 
 If none of these rules match, B<pg_wrapper> aborts with an error.
 
-For B<psql> and B<pg_isready>, B<pg_wrapper> will always use the binary from
+For B<psql>, B<pg_archivecleanup>, and B<pg_isready>, B<pg_wrapper> will always use the binary from
 the newest PostgreSQL version installed, as these are downwards compatible.
 
 =head1 OPTIONS

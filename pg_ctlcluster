@@ -1,12 +1,12 @@
 #!/usr/bin/perl -wT
 
 # multiversion/cluster aware pg_ctl wrapper; this also supplies the correct
-# configuration parameters to 'start', and makes sure that a postmaster really
+# configuration parameters to 'start', and makes sure that postgres really
 # stops on 'stop'.
 #
 # (C) 2005-2009 Martin Pitt <mpitt@debian.org>
 # (C) 2009 Cyril Bouthors <cyril@bouthors.org>
-# (C) 2013 Christoph Berg <myon@debian.org>
+# (C) 2013-2014 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -18,13 +18,20 @@
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 
+use strict;
+use warnings;
 use lib '/usr/share/postgresql-common';
 use Getopt::Long;
 use POSIX qw/setsid dup2 setlocale LC_ALL :sys_wait_h/;
 use PgCommon;
 use Fcntl 'SEEK_SET';
 
+my ($version, $cluster, $pg_ctl, $force);
+my (@postmaster_auxoptions, @pg_ctl_opts_from_cli);
+my (%postgresql_conf, %info);
 my $mode = 'smart'; # default shutdown mode
+my $foreground = 0; # don't daemonize, use postgres instead of pg_ctl
+my $stdlog = 0; # when run in foreground, still log to the default logfile
 
 # Check for known broken configurations of this cluster
 sub check_valid_config {
@@ -38,28 +45,12 @@ sub check_valid_config {
     # statement and other statistics are mutually exclusive
     if ($log_statement_stats && ($log_parser_stats || $log_planner_stats ||
 	$log_executor_stats)) {
-	error 'invalid postgresql.conf: log_statement_stats and the other log_*_stats options are mutually exclusive';
-    }
-}
-
-# Return the PID from an existing PID file or undef if it does not exist.
-# Arguments: <pid file path>
-sub get_running_pid {
-    return undef unless -e $_[0];
-
-    if (open PIDFILE, $_[0]) {
-	my $pid = <PIDFILE>;
-	close PIDFILE;
-        chomp $pid;
-        ($pid) = $pid =~ /^(\d+)\s*$/; # untaint
-	return $pid;
-    } else {
-	return undef;
+	error ('invalid postgresql.conf: log_statement_stats and the other log_*_stats options are mutually exclusive');
     }
 }
 
 # If a pid file is already present, delete it if it is stale/invalid, or exit
-# with a notice if it belongs to an already running postmaster.
+# with a notice if it belongs to an already running postgres.
 sub start_check_pid_file {
     my $pidfile = $info{'pgdata'}.'/postmaster.pid';
     if (PgCommon::check_pidfile_running $pidfile) {
@@ -77,7 +68,7 @@ sub start_check_pid_file {
 # Check if a pid file is not present or it is invalid. If so, clean up/abort.
 sub stop_check_pid_file {
     my $pidfile = $info{'pgdata'}.'/postmaster.pid';
-    my $pid = get_running_pid $pidfile;
+    my $pid = read_pidfile $pidfile;
     return if (defined $pid && PgCommon::check_pidfile_running $pidfile); 
     if ($info{'running'}) {
 	error 'pid file is invalid, please manually kill the stale server process.';
@@ -144,6 +135,11 @@ sub start {
 	my $lc_messages = PgCommon::get_conf_value $version, $cluster, 'postgresql.conf', 'lc_messages';
 	$ENV{LANG} = $lc_messages if $lc_messages;
     }
+    # 9.5 configures OOM killer using env vars
+    if ($version >= 9.5) {
+        $ENV{PG_OOM_ADJUST_FILE} = "/proc/self/oom_score_adj" unless (exists $ENV{PG_OOM_ADJUST_FILE});
+        # PG_OOM_ADJUST_VALUE defaults to 0, but can be overridden here
+    }
 
     my $postmaster_opts = '';
     my $usd = $version >= 9.3 ? 'unix_socket_directories' : 'unix_socket_directory';
@@ -178,14 +174,24 @@ sub start {
     $postmaster_opts .= ' ' . (join ' ', @postmaster_auxoptions);
     ($postmaster_opts) = $postmaster_opts =~ /(.*)/; # untaint
 
+    if ($foreground) {
+        if ($stdlog and $info{'logfile'}) {
+            dup2(POSIX::open($info{logfile}, POSIX::O_WRONLY|POSIX::O_APPEND), 1);
+            dup2(POSIX::open($info{logfile}, POSIX::O_WRONLY|POSIX::O_APPEND), 2);
+        }
+        my $postgres = get_program_path 'postgres', $version;
+        exec '/bin/sh', '-c', "exec $postgres $postmaster_opts" or
+            error "Executing $postgres failed: $!"
+    }
+
     # only supply or default logfile path when none is given explicitly in
     # postgresql.conf
-    @options = ($pg_ctl, 'start', '-D', $info{'pgdata'});
-    $logsize = 0;
+    my @options = ($pg_ctl, 'start', '-D', $info{'pgdata'});
+    my $logsize = 0;
     if ($info{'logfile'}) {
         push @options, ('-l', $info{'logfile'});
         # remember current size of the log
-        $logsize = (stat $info{'logfile'})[7];
+        $logsize = (stat $info{'logfile'})[7] || 0; # ignore stat errors
     }
 
     push @options, @pg_ctl_opts_from_cli if @pg_ctl_opts_from_cli;
@@ -208,8 +214,8 @@ sub start {
     }
 
     # wait a bit until the socket exists
-    $success = 0;
-    $currlogsize = 0;
+    my $success = 0;
+    my $currlogsize = 0;
     my $pidfile = $info{'pgdata'}.'/postmaster.pid';
     for (my $attempt = 0; $attempt < 60; $attempt++) {
         select (undef, undef, undef, 0.5);
@@ -219,7 +225,7 @@ sub start {
             last;
         }
 
-        # if the postmaster wrote something, but the process does not exist any
+        # if postgres wrote something, but the process does not exist any
         # more, there must be a problem and we can stop immediately
         last if ($currlogsize > $logsize && !PgCommon::check_pidfile_running $pidfile);
     }
@@ -267,7 +273,7 @@ sub stop {
         # if that still not helps, use the big hammer
         if (-f $info{'pgdata'}.'/postmaster.pid') {
             print "(does not shutdown, killing the process)";
-            $pid = get_running_pid $info{'pgdata'}.'/postmaster.pid';
+            my $pid = read_pidfile ($info{'pgdata'}.'/postmaster.pid');
             kill (9, $pid) if $pid;
 	    $result = 0;
         }
@@ -281,7 +287,7 @@ sub stop {
         }
     }
 
-    # external_pid_file files are currently not removed by postmaster itself
+    # external_pid_file files are currently not removed by postgres itself
     if ($result == 0) {
 	unlink "/var/run/postgresql/$version-$cluster.pid";
     }
@@ -303,6 +309,10 @@ sub reload {
     exec $pg_ctl, '-D', $info{'pgdata'}, '-s', @pg_ctl_opts_from_cli, 'reload';
 }
 
+sub status {
+    exec $pg_ctl, '-D', $info{'pgdata'}, 'status';
+}
+
 sub promote {
     exec $pg_ctl, '-D', $info{'pgdata'}, '-s', @pg_ctl_opts_from_cli, 'promote';
 }
@@ -314,6 +324,8 @@ sub promote {
 exit 1 unless GetOptions ('o|options=s' => \@postmaster_auxoptions,
     'f|force' => \$force,
     'm|mode=s' => \$mode,
+    'foreground' => \$foreground,
+    'stdlog' => \$stdlog,
 );
 
 if ($mode =~ /^(s(mart)?|f(ast)?|i(mmediate)?)$/) {
@@ -323,14 +335,19 @@ if ($mode =~ /^(s(mart)?|f(ast)?|i(mmediate)?)$/) {
     exit 1;
 }
 
-if ($#ARGV < 2) {
+# accept both "version cluster action" and "version[-/]cluster action"
+if (@ARGV < 2 or (@ARGV < 3 and $ARGV[0] !~ m![-/]!)) {
     print "Usage: $0 <version> <cluster> <action>\n";
     exit 1;
 }
 
 $version = shift @ARGV;
-$cluster = shift @ARGV;
-$action = shift @ARGV;
+if ($version =~ m!^(\d+\.\d)[-/](.+)!) {
+    ($version, $cluster) = ($1, $2);
+} else {
+    $cluster = shift @ARGV;
+}
+my $action = shift @ARGV;
 
 @pg_ctl_opts_from_cli=();
 foreach my $argv (@ARGV) {
@@ -355,12 +372,19 @@ unless (-d $info{'pgdata'} && defined $info{'owneruid'}) {
     error $info{'pgdata'} . ' is not accessible or does not exist';
 }
 
-# check that owner uig/gid is valid
+# check that owner uid/gid is valid
 unless (getpwuid $info{'owneruid'}) {
-    error 'The cluster is owned by user id '.$info{'owneruid'}.' which does not exist any more'
+    error 'The cluster is owned by user id '.$info{'owneruid'}.' which does not exist'
 }
 unless (getgrgid $info{'ownergid'}) {
-    error 'The cluster is owned by group id '.$info{'ownergid'}.' which does not exist any more'
+    error 'The cluster is owned by group id '.$info{'ownergid'}.' which does not exist'
+}
+# owneruid and configuid need to match, unless configuid is root
+if (($< == 0 or $> == 0) and $info{'configuid'} != 0 and
+        $info{'configuid'} != $info{'owneruid'}) {
+    my $configowner = (getpwuid $info{'configuid'})[0] || "(unknown)";
+    my $dataowner = (getpwuid $info{'owneruid'})[0];
+    error "Config owner ($configowner:$info{configuid}) and data owner ($dataowner:$info{owneruid}) do not match, and config owner is not root";
 }
 
 # recreate missing standard log dir
@@ -397,9 +421,9 @@ if ($action ne 'stop' && $info{'statstempdir'} && ! -d $info{'statstempdir'}) {
 }
 
 if ($> == 0) {
-    # have the postmaster start with increased OOM killer protection; 9.1 and
+    # have postgres start with increased OOM killer protection; 9.1 and
     # later has builtin support for resetting the adjustment of child processes
-    if ($action eq 'start' && $version >= '9.1') {
+    if ($action eq 'start' and $version >= '9.1' and not $PgCommon::rpm) {
         if (-w '/proc/self/oom_score_adj') {
 	    open F, '>/proc/self/oom_score_adj';
 	    print F "-900\n";
@@ -420,14 +444,11 @@ if( $> != $info{'owneruid'} ) {
 
 $pg_ctl = get_program_path 'pg_ctl', $version;
 
-%actions = ('start' => \&start, 'stop' => \&stop, 'reload' => \&reload,
-            'restart' => \&restart, 'promote' => \&promote);
-
-if ($actions{$action}) {
-    exit $actions{$action}->();
+if ($action =~ /^(start|stop|restart|reload|status|promote)$/) {
+    no strict 'refs';
+    exit &$action;
 } else {
-    error 'Error: invalid action (must be one of: '.
-        (join ', ', sort keys %actions) . ')';
+    error 'Invalid action (must be one of: start stop restart reload status promote)';
 }
 
 __END__
@@ -440,17 +461,20 @@ pg_ctlcluster - start/stop/restart/reload a PostgreSQL cluster
 
 B<pg_ctlcluster> [I<options>] I<cluster-version> I<cluster-name> I<action> B<--> [I<pg_ctl options>]
 
-where I<action> = B<start>|B<stop>|B<restart>|B<reload>|B<promote>
+where I<action> = B<start>|B<stop>|B<restart>|B<reload>|B<status>|B<promote>
 
 =head1 DESCRIPTION
 
-This program controls the B<postmaster> server for a particular cluster. It
+This program controls the B<postgres> server for a particular cluster. It
 essentially wraps the L<pg_ctl(1)> command. It determines the cluster version
 and data path and calls the right version of B<pg_ctl> with appropriate
 configuration parameters and paths.
 
 You have to start this program as the user who owns the database cluster or as
 root.
+
+To ease integration with B<systemd> operation, the alternative syntax
+"B<pg_ctlcluster> I<version>B<->I<cluster> I<action>" is also supported.
 
 =head1 ACTIONS
 
@@ -461,13 +485,13 @@ root.
 A log file for this specific cluster is created if it does not exist yet (by
 default,
 C</var/log/postgresql/postgresql->I<cluster-version>C<->I<cluster-name>C<.log>),
-and a PostreSQL server process (L<postmaster(1)>) is started on it. Exits with
+and a PostreSQL server process (L<postgres(1)>) is started on it. Exits with
 0 on success, with 2 if the server is already running, and with 1 on other
 failure conditions.
 
 =item B<stop>
 
-Stops the L<postmaster(1)> server of the given cluster. By default, "smart"
+Stops the L<postgres(1)> server of the given cluster. By default, "smart"
 shutdown mode is used, which waits until all clients disconnected.
 
 =item B<restart>
@@ -478,6 +502,11 @@ Stops the server if it is running and starts it (again).
 
 Causes the configuration files to be re-read without a full shutdown of the
 server.
+
+=item B<status>
+
+Checks whether a server is running. If it is, the PID and the command line
+options that were used to invoke it are displayed.
 
 =item B<promote>
 
@@ -496,7 +525,7 @@ For B<stop> and B<restart>, the "fast" mode is used which rolls back all active
 transactions, disconnects clients immediately and thus shuts down cleanly. If
 that does not work, shutdown is attempted again in "immediate" mode, which can
 leave the cluster in an inconsistent state and thus will lead to a recovery run
-at the next start. If this still does not help, the B<postmaster> process is
+at the next start. If this still does not help, the B<postgres> process is
 killed.  Exits with 0 on success, with 2 if the server is not running, and with
 1 on other failure conditions. This mode should only be used when the machine
 is about to be shut down.
@@ -506,15 +535,24 @@ is about to be shut down.
 Shutdown mode to use for B<stop> and B<restart> actions, default is B<smart>.
 See pg_ctl(1) for documentation.
 
+=item B<--foreground>
+
+Start B<postgres> in foreground, without daemonizing via B<pg_ctl>.
+
+=item B<--stdlog>
+
+When B<--foreground> is in use, redirect stderr to the standard logfile in
+C</var/log/postgresql/>.  (Default when not run in foreground.)
+
 =item B<-o>|B<--options> I<option>
 
-Pass given I<option> as command line option to the C<postmaster> process. It is
-possible to specify B<-o> multiple times. See L<postmaster(1)> for a
+Pass given I<option> as command line option to the C<postgres> process. It is
+possible to specify B<-o> multiple times. See L<postgres(1)> for a
 description of valid options.
 
 =item I<pg_ctl options>
 
-Pass given I<pg_ctl options> as command line options to pg_ctl. See L<pg_ctl(1)>
+Pass given I<pg_ctl options> as command line options to B<pg_ctl>. See L<pg_ctl(1)>
 for a description of valid options.
 
 =back
@@ -535,10 +573,15 @@ section "STARTUP CONTROL" in L<pg_createcluster(8)> for details.
 
 =back
 
+=head1 BUGS
+
+Changing the port number on startup using B<-o -p> will not work as it breaks
+the checks for running clusters.
+
 =head1 SEE ALSO
 
 L<pg_createcluster(8)>, L<pg_ctl(1)>, L<pg_wrapper(1)>, L<pg_lsclusters(1)>,
-L<postmaster(1)>
+L<postgres(1)>
 
 =head1 AUTHOR
 

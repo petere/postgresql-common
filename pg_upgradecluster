@@ -4,7 +4,7 @@
 #
 # (C) 2005-2009 Martin Pitt <mpitt@debian.org>
 # (C) 2013 Peter Eisentraut <petere@debian.org>
-# (C) 2013 Christoph Berg <myon@debian.org>
+# (C) 2013-2014 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -169,6 +169,10 @@ sub adapt_conffiles {
         rename_ \%c, 'unix_socket_directory', 'unix_socket_directories';
         rename_ \%c, 'replication_timeout', 'wal_sender_timeout';
     }
+
+    if ($newversion >= '9.4') {
+        deprecate \%c, 'krb_srvname', 'native krb5 authentication deprecated in favor of GSSAPI';
+    }
 }
 
 # Save original pg_hba.conf, replace it with one that only allows local access
@@ -214,6 +218,18 @@ sub get_encoding {
     }
     unless ($encoding && $old_lc_ctype && $old_lc_collate) {
 	error 'could not get cluster locales';
+    }
+}
+
+# RedHat's run-parts doesn't support any options, supply a minimalistic implementation here
+# BUG: we don't care about validating the filenames yet
+# Arguments: <directory> <argv to pass to scripts>
+sub run_parts {
+    my ($dir, @argv) = @_;
+    for my $script (<$dir/*>) {
+        my ($s) = $script =~ /(.*)/; # untaint
+        system ($s, @argv);
+        error "$s failed: $?" if ($?);
     }
 }
 
@@ -355,7 +371,8 @@ my $pg_restore = get_program_path 'pg_restore', $newversion;
 # check whether upgrade scripts exist; if so, verify that pg_restore supports
 # -X no-data-for-failed-tables.
 my $upgrade_scripts = (-d "$PgCommon::common_confdir/pg_upgradecluster.d" &&
-     `run-parts --test $PgCommon::common_confdir/pg_upgradecluster.d`);
+     ($PgCommon::rpm ? `ls $PgCommon::common_confdir/pg_upgradecluster.d` :
+         `run-parts --test $PgCommon::common_confdir/pg_upgradecluster.d`));
 
 if ($upgrade_scripts) {
     if (`$pg_restore --help` !~ qr/no-data-for-failed-tables/) {
@@ -365,17 +382,28 @@ if ($upgrade_scripts) {
 
 # Run upgrade scripts in init phase
 if ($upgrade_scripts) {
-    print "Running <init> phase upgrade helper scripts...\n";
+    print "Running <init> phase upgrade hook scripts...\n";
     if (!fork) {
 	change_ugid $info{'owneruid'}, $info{'ownergid'};
+
+        if ($PgCommon::rpm) {
+            run_parts ("$PgCommon::common_confdir/pg_upgradecluster.d",
+                $version, $cluster, $newversion, 'init');
+            exit;
+        }
 
 	@argv = ('run-parts', '--lsbsysinit', '-a', $version, '-a', $cluster,
 	    '-a', $newversion, '-a', 'init',
 	    "$PgCommon::common_confdir/pg_upgradecluster.d");
 	error "$PgCommon::common_confdir/pg_upgradecluster.d script failed" if system @argv;
-	exit 0;
+        exit 0;
     }
     wait;
+    if ($?) {
+        print STDERR "Error during running upgrade hooks, removing new cluster\n";
+        system 'pg_dropcluster', '--stop', $newversion, $cluster;
+        exit 1;
+    }
 }
 
 # dump cluster; drop to cluster owner privileges
@@ -390,11 +418,14 @@ if (!fork) {
 
     if ($method eq 'dump') {
 	# check for tablespaces (not supported)
-	open F, '-|', $oldpsql, '-h', $oldsocket, '-d', 'template1', '-Atc', 
+	open F, '-|', $oldpsql, '-h', $oldsocket, '-p', $info{'port'}, '-d', 'template1', '-Atc', 
 		"SELECT count(*) FROM pg_tablespace WHERE spcname <> 'pg_default' AND spcname <> 'pg_global'"
 	    or die "Calling $psql: $!";
 	$buffer = <F>;
 	close F;
+	if (not defined $buffer) {
+	    error 'Could not query number of tablespace in old cluster';
+	}
 	if ($buffer ne "0\n") {
 	    error 'automatic upgrade of tablespaces is not supported';
 	}
@@ -535,9 +566,10 @@ if (!fork) {
 	use File::Temp qw(tempdir);
 
 	my $pg_upgrade = get_program_path 'pg_upgrade', $newversion;
+        $pg_upgrade or error "pg_upgrade $newversion not found";
 	my @argv = ($pg_upgrade,
-		 '-b', "/usr/lib/postgresql/$version/bin",
-		 '-B', "/usr/lib/postgresql/$newversion/bin",
+		 '-b', "$PgCommon::binroot$version/bin",
+		 '-B', "$PgCommon::binroot$newversion/bin",
 		 '-d', $info{'pgdata'},
 		 '-D', $newinfo{'pgdata'},
 		 '-p', $info{'port'},
@@ -556,8 +588,12 @@ if (!fork) {
 	# man page), but we want to support some earlier versions as
 	# well for a while.)
 	foreach my $file ('postgresql.conf', 'pg_hba.conf', 'pg_ident.conf') {
-	    symlink($info{'configdir'}."/$file", $info{'pgdata'}."/$file") or error 'could not symlink configuration file';
-	    symlink($newinfo{'configdir'}."/$file", $newinfo{'pgdata'}."/$file") or error 'could not symlink configuration files';
+	    -l "$info{pgdata}/$file" or
+		symlink("$info{configdir}/$file", "$info{pgdata}/$file") or
+		error "could not create symlink $info{pgdata}/$file";
+	    -l "$newinfo{pgdata}/$file" or
+		symlink("$newinfo{configdir}/$file", "$newinfo{pgdata}/$file") or
+		error "could not create symlink $newinfo{pgdata}/$file";
 	}
 	# Run pg_upgrade.
 	my $status = system @argv;
@@ -569,7 +605,8 @@ if (!fork) {
 	# pg_ctlcluster, but not by pg_upgrade).
 	unlink "/var/run/postgresql/$version-$cluster.pid";
 
-	$status == 0 or error 'pg_upgrade run failed';
+	$status == 0 or error "pg_upgrade run failed. Logfiles are in $logdir";
+        print "pg_upgrade output scripts are in $logdir\n";
     }
 
     exit 0;
@@ -663,17 +700,24 @@ error "Could not start target cluster; please check configuration and log files"
 
 # Run upgrade scripts in finish phase
 if ($upgrade_scripts) {
-    print "Running <finish> phase upgrade helper scripts...\n";
+    print "Running <finish> phase upgrade hook scripts...\n";
     if (!fork) {
 	change_ugid $info{'owneruid'}, $info{'ownergid'};
+
+        if ($PgCommon::rpm) {
+            run_parts ("$PgCommon::common_confdir/pg_upgradecluster.d",
+                $version, $cluster, $newversion, 'finish');
+            exit;
+        }
 
 	@argv = ('run-parts', '--lsbsysinit', '-a', $version, '-a', $cluster,
 	    '-a', $newversion, '-a', 'finish',
 	    "$PgCommon::common_confdir/pg_upgradecluster.d");
 	error "$PgCommon::common_confdir/pg_upgradecluster.d script failed" if system @argv;
-	exit 0;
+        exit 0;
     }
     wait;
+    exit $? >> 8 if ($?);
 }
 
 print "Success. Please check that the upgraded cluster works. If it does,
@@ -773,7 +817,7 @@ particular, dots (i. e. file extensions) are not allowed.
 
 Scripts in that directory will be called with the following arguments:
 
-<old version> <cluster name> <new version> <phase> 
+<old version> <cluster name> <new version> <phase>
 
 Phases:
 
@@ -784,16 +828,20 @@ Phases:
 A virgin cluster of version I<new version> has been created, i. e.  this new
 cluster will already have B<template1>, but no user databases. Please note that
 you should not create tables in this phase, since they will be overwritten by
-the dump/restore operation.
+the dump/restore or B<pg_upgrade> operation.
 
 =item B<finish>
 
 All data from the old version cluster has been dumped/reloaded into the new
-one. The old cluster still exists.
+one. The old cluster still exists, but is not running.
 
 =back
 
+Failing scripts will abort the upgrade.
 The scripts are called as the user who owns the database.
+
+When B<--mode=dump> and upgrade hook scripts are used, pg_restore is invoked
+with B<--no-data-for-failed-tables>.
 
 =head1 SEE ALSO
 

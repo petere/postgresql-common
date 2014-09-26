@@ -1,0 +1,28 @@
+# systemd service template for PostgreSQL clusters. The actual instances will
+# be called "postgresql@version-cluster", e.g. "postgresql@9.3-main". The
+# variable %i expands to "version-cluster", %I expands to "version/cluster".
+# (%I breaks for cluster names containing dashes.)
+
+[Unit]
+Description=PostgreSQL Cluster %i
+ConditionPathExists=/etc/postgresql/%I/postgresql.conf
+PartOf=postgresql.service
+ReloadPropagatedFrom=postgresql.service
+
+[Service]
+# @: use "postgresql@%i" as process name
+ExecStart=@/usr/bin/pg_ctlcluster postgresql@%i --foreground --stdlog %i start
+ExecStop=/usr/bin/pg_ctlcluster -m fast %i stop
+ExecReload=/usr/bin/pg_ctlcluster %i reload
+PIDFile=/var/run/postgresql/%i.pid
+SyslogIdentifier=postgresql@%i
+# restarting automatically will prevent "pg_ctlcluster ... stop" from working,
+# so we disable it here. Also, the postmaster will restart by itself on most
+# problems anyway, so it is questionable if one wants to enable external
+# automatic restarts.
+#Restart=on-failure
+# (This should make pg_ctlcluster stop work, but doesn't:)
+#RestartPreventExitStatus=SIGINT SIGTERM
+
+[Install]
+WantedBy=multi-user.target

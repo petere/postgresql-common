@@ -1,16 +1,17 @@
 # Danish translation postgresql-common.
-# Copyright (C) 2011 THE PACKAGE'S COPYRIGHT HOLDER.
+# Copyright (C) 2014 THE PACKAGE'S COPYRIGHT HOLDER.
 # This file is distributed under the same license as the postgresql-common package.
-# Joe Hansen (joedalton2@yahoo.dk), 2011.
+# Joe Hansen (joedalton2@yahoo.dk), 2011, 2014.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: postgresql-common\n"
-"Report-Msgid-Bugs-To: Source: postgresql-common@packages.debian.org\n"
-"POT-Creation-Date: 2008-02-03 13:01+0100\n"
-"PO-Revision-Date: 2011-03-20 19:25+0200\n"
+"Report-Msgid-Bugs-To: postgresql-common@packages.debian.org\n"
+"POT-Creation-Date: 2014-05-20 11:16+0200\n"
+"PO-Revision-Date: 2014-07-06 19:25+0200\n"
 "Last-Translator: Joe Hansen <joedalton2@yahoo.dk>\n"
 "Language-Team: Danish <debian-l10n-danish@lists.debian.org>\n"
+"Language: da\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -30,8 +31,8 @@ msgid ""
 "${latest} and postgresql-client-${latest}) and upgrade the existing "
 "${oldversion} clusters with pg_upgradecluster (see manpage)."
 msgstr ""
-"PostgreSQL-versionen ${old} er forældet, men server- eller klientpakkerne "
-"er stadig installeret. Installer venligst de seneste pakker (postgresql-"
+"PostgreSQL-versionen ${old} er forældet, men server- eller klientpakkerne er "
+"stadig installeret. Installer venligst de seneste pakker (postgresql-"
 "${latest} og postgresql-client-${latest}) og opgrader de eksisterende "
 "${oldversion}-klynger med pg_upgradecluster (se manpage)."
 
@@ -70,4 +71,42 @@ msgid ""
 "Please see /usr/share/doc/postgresql-common/README.Debian.gz for details."
 msgstr ""
 "Se venligst /usr/share/doc/postgresql-common/README.Debian.gz for detaljer."
+
+#. Type: boolean
+#. Description
+#: ../postgresql-common.templates:3001
+msgid "Enable SSL by default in new PostgreSQL clusters?"
+msgstr "Aktiver SSL som standard i nye PostgreSQL-klynger?"
+
+#. Type: boolean
+#. Description
+#: ../postgresql-common.templates:3001
+msgid ""
+"PostgreSQL supports SSL-encrypted connections. This is usually a good thing. "
+"However, if the database is solely accessed using TCP connections on "
+"localhost, SSL can be turned off without introducing security issues."
+msgstr ""
+"PostgreSQL understøtter SSL-krypterede forbindelser. Dette er normalt en god "
+"ting. Hvis databasen alene tilgås via TCP-forbindelser på localhost, så kan "
+"SSL dog slukkes uden at der bliver introduceret sikkerhedsproblemstillinger." 
+
+#. Type: boolean
+#. Description
+#: ../postgresql-common.templates:3001
+msgid ""
+"UNIX domain socket connections (called \"local\" in pg_hba.conf) are not "
+"affected by this setting. This setting concerns new PostgreSQL clusters "
+"created during package install, or by using the pg_createcluster command. It "
+"does not reconfigure existing clusters."
+msgstr ""
+"UNIX-domænesokkelforbindelser (kaldt »local« i pg_hba.conf) influeres ikke "
+"af denne indstilling. Denne indstilling vedrører nye PostgreSQL-klynger "
+"oprettet under pakkeinstallation, eller ved at bruge kommandoen pg_createcluster. "
+"Den rekonfigurerer eksisterende klynger."
+
+#. Type: boolean
+#. Description
+#: ../postgresql-common.templates:3001
+msgid "If unsure, enable SSL."
+msgstr "Hvis usikker, aktiver SSL."
 
