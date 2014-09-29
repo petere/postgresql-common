@@ -45,7 +45,7 @@ clean:
 	rm -f *.1 *.8
 
 
-common_programs = pg_wrapper pg_createcluster pg_ctlcluster pg_dropcluster pg_lsclusters pg_updatedicts pg_upgradecluster
+common_programs = pg_wrapper pg_conftool pg_createcluster pg_ctlcluster pg_dropcluster pg_lsclusters pg_updatedicts pg_upgradecluster
 
 wrapped_programs = clusterdb createdb createlang createuser dropdb droplang dropuser pg_dump pg_dumpall pg_basebackup pg_isready pg_restore pg_receivexlog psql reindexdb vacuumdb vacuumlo pgbench
 
