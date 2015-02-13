@@ -237,8 +237,7 @@ Options:
   -g <gid>      group for data files (default: primary group of owner)
   -d <dir>      data directory (default: 
                 /var/lib/postgresql/<version>/<cluster name>)
-  -s <dir>      socket directory (default: /var/run/postgresql for clusters
-                owned by 'postgres', /tmp for other clusters)
+  -s <dir>      socket directory (default: /tmp)
   -l <dir>      path to desired log file (default:
                 /var/log/postgresql/postgresql-<version>-<cluster>.log)
   --locale <encoding>
@@ -398,7 +397,7 @@ $orig_egid = $);
 $) = $ownergid;
 $> = $owneruid;
 unless ($socketdir) {
-    if ($PgCommon::rpm) {
+    if (1) {
         $socketdir = '/tmp'; # RedHat defaults to /tmp in libpq et al.
     } elsif (-w '/var/run/postgresql') {
 	$socketdir = '/var/run/postgresql';

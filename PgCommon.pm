@@ -384,7 +384,7 @@ sub get_cluster_socketdir {
     $socketdir =~ s/\s*,.*// if ($socketdir); # ignore additional directories for now
     return $socketdir if $socketdir;
 
-    #redhat# return '/tmp'; # RedHat PGDG packages default to /tmp
+    return '/tmp'; # RedHat PGDG packages default to /tmp
     # try to determine whether this is a postgres owned cluster and we default
     # to /var/run/postgresql
     $socketdir = '/var/run/postgresql';
