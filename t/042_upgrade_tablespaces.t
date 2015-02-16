@@ -32,10 +32,13 @@ is ((exec_as 'postgres', "psql template1 -c \"CREATE TABLESPACE myts LOCATION '$
 
 # attempt to upgrade
 
+TODO: {
+    local $TODO = 'pg_upgradecluster does not support additional initdb options';
 my $outref;
-exec_as 0, "(pg_upgradecluster $MAJORS[0] upgr | sed -e 's/^/STDOUT: /')", $outref, 0;
+exec_as 'postgres', "(pg_upgradecluster $MAJORS[0] upgr | sed -e 's/^/STDOUT: /')", $outref, 0;
 my @err = grep (!/^STDOUT: /, split (/\n/, $$outref));
 ok ($err[0] =~ /tablespaces.*not supported/, 'error message about unsupported tablespaces');
+}
 
 # clean up
 is ((system "pg_dropcluster $MAJORS[0] upgr --stop"), 0, "pg_dropcluster $MAJORS[0] upgr");

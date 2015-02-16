@@ -8,7 +8,7 @@ use File::Temp qw/tempdir/;
 
 my $version = $MAJORS[-1];
 
-use Test::More tests => 34;
+use Test::More tests => 22;
 
 use lib '/usr/share/postgresql-common';
 use PgCommon;
@@ -17,19 +17,22 @@ delete $ENV{'LANG'};
 delete $ENV{'LANGUAGE'};
 $ENV{'LC_ALL'} = 'C';
 
-my $wdir = tempdir (CLEANUP => 1);
+my $wdir = tempdir (CLEANUP => 1, DIR => $ENV{HOME});
 chmod 0755, $wdir or die "Could not chmod $wdir: $!";
 
 # create clusters for different owners and check their integration
-for my $o ('postgres', 'nobody') {
+for my $o ($ENV{USER}) {
     my $cdir = "$wdir/c";
     mkdir $cdir;
     my $oid = getpwnam $o;
-    chown $oid, 0, $cdir or die "Could not chown $cdir to $oid: $!";
-    like_program_out $o, "$PgCommon::binroot$version/bin/initdb $cdir/$o", 
+    chown $oid, -1, $cdir or die "Could not chown $cdir to $oid: $!";
+    like_program_out 0, "$PgCommon::binroot$version/bin/initdb -U $o $cdir/$o", 
 	0, qr/Success/, "creating raw initdb cluster for user $o";
     like_program_out 0, "pg_createcluster $version $o -d $cdir/$o", 0, 
 	qr/Configuring already existing cluster/i, "integrating $o cluster";
+    open ENV, ">", "$PgCommon::confroot/$version/$o/environment" or die $!;
+    print ENV "PGUSER=$o\n";
+    close ENV;
     like_program_out 0, "pg_lsclusters", 0,
 	qr/$version\s+$o\s+5432\s+down\s+$o\s/, 'correct pg_lsclusters output';
     is_program_out $o, "pg_ctlcluster $version $o start", 0, '', "starting cluster $o";

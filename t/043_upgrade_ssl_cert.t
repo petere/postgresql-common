@@ -7,13 +7,13 @@ use File::Temp qw/tempdir/;
 use lib 't';
 use TestLib;
 
-use Test::More tests => ($#MAJORS == 0 or $PgCommon::rpm) ? 1 : 24;
+use Test::More tests => 1;
 
 if ($#MAJORS == 0) {
     pass 'only one major version installed, skipping upgrade tests';
     exit 0;
 }
-if ($PgCommon::rpm) {
+if (1) {
     pass 'SSL certificates not handled on RedHat';
     exit 0;
 }

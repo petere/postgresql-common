@@ -371,7 +371,7 @@ my $pg_restore = get_program_path 'pg_restore', $newversion;
 # check whether upgrade scripts exist; if so, verify that pg_restore supports
 # -X no-data-for-failed-tables.
 my $upgrade_scripts = (-d "$PgCommon::common_confdir/pg_upgradecluster.d" &&
-     ($PgCommon::rpm ? `ls $PgCommon::common_confdir/pg_upgradecluster.d` :
+     (1 ? `ls $PgCommon::common_confdir/pg_upgradecluster.d` :
          `run-parts --test $PgCommon::common_confdir/pg_upgradecluster.d`));
 
 if ($upgrade_scripts) {
@@ -386,7 +386,7 @@ if ($upgrade_scripts) {
     if (!fork) {
 	change_ugid $info{'owneruid'}, $info{'ownergid'};
 
-        if ($PgCommon::rpm) {
+        if (1) {
             run_parts ("$PgCommon::common_confdir/pg_upgradecluster.d",
                 $version, $cluster, $newversion, 'init');
             exit;
@@ -704,7 +704,7 @@ if ($upgrade_scripts) {
     if (!fork) {
 	change_ugid $info{'owneruid'}, $info{'ownergid'};
 
-        if ($PgCommon::rpm) {
+        if (1) {
             run_parts ("$PgCommon::common_confdir/pg_upgradecluster.d",
                 $version, $cluster, $newversion, 'finish');
             exit;

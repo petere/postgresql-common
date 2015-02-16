@@ -10,7 +10,7 @@ my $version = $MAJORS[0];
 use Test::More tests => 30;
 
 # prepare nobody-owned root dir for $PG_CLUSTER_CONF_ROOT
-my $rootdir=`su -s /bin/sh -c 'mktemp -d' nobody`;
+my $rootdir=`mktemp -d`;
 chomp $rootdir;
 ($rootdir) = $rootdir =~ m!^([a-zA-Z0-9._/]+)$!; # untaint
 $ENV{'PG_CLUSTER_CONF_ROOT'} = "$rootdir/etc";

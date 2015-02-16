@@ -48,7 +48,7 @@ is ((system "pg_ctlcluster $MAJORS[0] old start >/dev/null"), 0, "starting clust
 is ((system "pg_ctlcluster $MAJORS[-1] new1 start >/dev/null"), 0, "starting cluster $new1");
 is ((system "pg_ctlcluster $MAJORS[-1] new2 start >/dev/null"), 0, "starting cluster $new2");
 
-like_program_out 'postgres', 'pg_lsclusters -h | sort -k3', 0, qr/.*5432.*5434.*5440.*/s,
+like_program_out 'postgres', 'pg_lsclusters -h | sed "s/   */ /g" | sort -k3', 0, qr/.*5432.*5434.*5440.*/s,
     'clusters have the correct ports, skipping used 5433';
 
 # move user_clusters aside for the test; this will ensure that client programs
@@ -184,28 +184,34 @@ delete $ENV{'PGDATABASE'};
 # check by-user cluster selection with user_clusters
 # (also check invalid cluster reporting)
 open F, '>/etc/postgresql-common/user_clusters' or die "Could not create user_clusters: $!";
-print F "postgres * $MAJORS[-1] new1 *\nnobody * $MAJORS[0] old *\n* * 5.5 * *";
+print F "$ENV{USER} * $MAJORS[-1] new1 *\nnobody * $MAJORS[0] old *\n* * 5.5 * *";
 close F;
 chmod 0644, '/etc/postgresql-common/user_clusters';
 like_program_out 'postgres', 'createdb --version', 0, qr/^createdb \(PostgreSQL\) $MAJORS[-1]/, 
     'pg_wrapper selects correct cluster with per-user user_clusters';
+SKIP: {
+    skip "don't support multiuser", 4;
 like_program_out 'nobody', 'createdb --version', 0, qr/^createdb \(PostgreSQL\) $MAJORS[0]/, 
     'pg_wrapper selects correct cluster with per-user user_clusters';
 like_program_out 0, 'createdb --version', 1, qr/user_clusters.*line 3.*version.*not exist/i, 
     'pg_wrapper error for invalid per-user user_clusters line';
+}
 
 # check by-user network cluster selection with user_clusters
 # (also check invalid cluster reporting)
 open F, '>/etc/postgresql-common/user_clusters' or die "Could not create user_clusters: $!";
-print F "postgres * $MAJORS[0] localhost: *\nnobody * $MAJORS[-1] new1 *\n* * $MAJORS[-1] localhost:a *";
+print F "$ENV{USER} * $MAJORS[0] localhost: *\nnobody * $MAJORS[-1] new1 *\n* * $MAJORS[-1] localhost:a *";
 close F;
 chmod 0644, '/etc/postgresql-common/user_clusters';
 like_program_out 'postgres', 'createdb --version', 0, qr/^createdb \(PostgreSQL\) $MAJORS[0]/, 
     'pg_wrapper selects correct version with per-user user_clusters';
+SKIP: {
+    skip "don't support multiuser", 4;
 like_program_out 'nobody', 'createdb --version', 0, qr/^createdb \(PostgreSQL\) $MAJORS[-1]/, 
     'pg_wrapper selects correct version with per-user user_clusters';
 like_program_out 0, 'createdb --version', 1, qr/user_clusters.*line 3.*cluster.*not exist/i, 
     'pg_wrapper error for invalid per-user user_clusters line';
+}
 # check PGHOST environment variable precedence
 $ENV{'PGHOST'} = '127.0.0.2';
 like_program_out 'postgres', 'psql -Atl', 2, qr/127.0.0.2/, '$PGHOST overrides user_clusters';
@@ -263,7 +269,7 @@ unlink '/etc/postgresql-common/pg_service.conf';
 is ((system "pg_ctlcluster $MAJORS[0] old stop >/dev/null"), 0, "stopping cluster $old");
 PgCommon::set_conf_value $MAJORS[0], 'old', 'postgresql.conf', 'port', '5435';
 is ((system "pg_ctlcluster $MAJORS[0] old start >/dev/null"), 0, "restarting cluster $old");
-like_program_out 'postgres', 'pg_lsclusters -h | sort -k3', 0, qr/.*5434.*5435.*5440.*/s,
+like_program_out 'postgres', 'pg_lsclusters -h | sed "s/   */ /g" | sort -k3', 0, qr/.*5434.*5435.*5440.*/s,
     'port of first cluster was successfully changed';
 like_program_out 'postgres', "psql -l", 1, 
     qr/no.*default.*man pg_wrapper/i,

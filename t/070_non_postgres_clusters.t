@@ -6,7 +6,8 @@ use strict;
 use lib 't';
 use TestLib;
 
-use Test::More tests => 52;
+use Test::More;
+plan skip_all => 'not supported';
 
 my $owner = 'nobody';
 my $v = $MAJORS[0];

@@ -28,7 +28,7 @@ sub check_cluster {
     # check encoding
     sleep 1;
     my $outref;
-    is ((exec_as 'postgres', "psql -Atl --cluster $v/$cluster_name", $outref, 0), 0,
+    is ((exec_as 'postgres', "psql -X -Atl --cluster $v/$cluster_name", $outref, 0), 0,
 	'psql -l succeeds');
     my $is_unicode = 0;
     $is_unicode = 1 if defined $enc && $enc =~ /(UNICODE|UTF-8)/;
@@ -41,27 +41,27 @@ sub check_cluster {
 
     # create a table and stuff some ISO-8859-5 characters into it (для)
     is ((exec_as 'postgres', "createdb test", $outref), 0, 'creating test database');
-    is_program_out 'postgres', "printf '\324\333\357' | psql -qc \"set client_encoding='iso-8859-5'; 
+    is_program_out 'postgres', "printf '\324\333\357' | psql -X -qc \"set client_encoding='iso-8859-5'; 
 	create table t (x varchar); copy t from stdin\" test", 0, '',
 	'creating table with ISO-8859-5 characters';
-    is_program_out 'postgres', "echo \"set client_encoding='utf8'; select * from t\" | psql -Atq test", 0,
+    is_program_out 'postgres', "echo \"set client_encoding='utf8'; select * from t\" | psql -X -Atq test", 0,
 	"\320\264\320\273\321\217\n", 'correct string in UTF-8';
-    is_program_out 'postgres', "echo \"set client_encoding='iso-8859-5'; select * from t\" | psql -Atq test", 0,
+    is_program_out 'postgres', "echo \"set client_encoding='iso-8859-5'; select * from t\" | psql -X -Atq test", 0,
 	"\324\333\357\n", 'correct string in ISO-8859-5';
 
     # do the same test with using UTF-8 as input
-    is_program_out 'postgres', "printf '\320\264\320\273\321\217' | psql -qc \"set client_encoding='utf8'; 
+    is_program_out 'postgres', "printf '\320\264\320\273\321\217' | psql -X -qc \"set client_encoding='utf8'; 
 	delete from t; copy t from stdin\" test", 0, '',
 	'creating table with UTF-8 characters';
-    is_program_out 'postgres', "echo \"set client_encoding='utf8'; select * from t\" | psql -Atq test", 0,
+    is_program_out 'postgres', "echo \"set client_encoding='utf8'; select * from t\" | psql -X -Atq test", 0,
 	"\320\264\320\273\321\217\n", 'correct string in UTF-8';
-    is_program_out 'postgres', "echo \"set client_encoding='iso-8859-5'; select * from t\" | psql -Atq test", 0,
+    is_program_out 'postgres', "echo \"set client_encoding='iso-8859-5'; select * from t\" | psql -X -Atq test", 0,
 	"\324\333\357\n", 'correct string in ISO-8859-1';
 
     # check encoding of server error messages (breaks in locale/encoding mismatches, so skip that)
     if (!defined $enc) {
 	# temporarily disable and accept English text, since Russian translations are disabled now
-	like_program_out 'postgres', 'psql test -c "set client_encoding = \'UTF-8\'; select sqrt(-1)"', 1,
+	like_program_out 'postgres', 'psql -X test -c "set client_encoding = \'UTF-8\'; select sqrt(-1)"', 1,
 	    qr/^[^?]*(брать|отрицательного|cannot take square root)[^?]*$/, 'Server error message has correct language and encoding';
     }
 
@@ -77,21 +77,21 @@ sub check_cluster {
     # check interception of invalidly encoded/escaped strings
     if ($is_unicode) {
 	like_program_out 'postgres', 
-	    'printf "set client_encoding=\'UTF-8\'; select \'\\310\\\\\'a\'" | psql -Atq template1',
+	    'printf "set client_encoding=\'UTF-8\'; select \'\\310\\\\\'a\'" | psql -X -Atq template1',
 	    0, qr/(UNICODE|UTF8).*0x(c8.*5c|c8.*27)/,
 	    'Server rejects incorrect encoding (CVE-2006-2313)';
 	like_program_out 'postgres', 
-	    'printf "set client_encoding=\'SJIS\'; select \'\\\\\\\'a\'" | psql -Atq template1',
+	    'printf "set client_encoding=\'SJIS\'; select \'\\\\\\\'a\'" | psql -X -Atq template1',
 	    0, qr/(\\' is insecure)|(unterminated quoted string)/,
 	    'Server rejects \\\' escaping in unsafe client encoding (CVE-2006-2314)';
 	if ($v >= '9.1') {
 	    like_program_out 'postgres', 
-		"printf \"set client_encoding='UTF-8'; set escape_string_warning='off'; select '\\\\\\'a'\" | psql -Atq template1",
+		"printf \"set client_encoding='UTF-8'; set escape_string_warning='off'; select '\\\\\\'a'\" | psql -X -Atq template1",
 		0, qr/unterminated quoted string/,
 		'Server rejects obsolete \\\' escaping in unsafe client encoding (CVE-2006-2314)';
 	} else {
 	    is_program_out 'postgres', 
-		"printf \"set client_encoding='UTF-8'; set escape_string_warning='off'; select '\\\\\\'a'\" | psql -Atq template1",
+		"printf \"set client_encoding='UTF-8'; set escape_string_warning='off'; select '\\\\\\'a'\" | psql -X -Atq template1",
 		    0, "'a\n", 'Server accepts \\\' escaping in safe client encoding (CVE-2006-2314)';
 	}
     }
@@ -101,13 +101,13 @@ sub check_cluster {
 }
 
 foreach my $v (@MAJORS) {
-    check_cluster $v, 'ru_RU';
+    check_cluster $v, 'ru_RU.KOI8-R';
     check_cluster $v, 'ru_RU.UTF-8';
 
     # check LC_* over LANG domination
     is ((system "LANGUAGE= LC_ALL=C LANG=bo_GUS.UTF-8 pg_createcluster --start $v main >/dev/null 2>&1"), 0,
             "pg_createcluster: LC_ALL dominates LANG");
-    like_program_out 'postgres', "psql -Atl --cluster $v/main", 0,
+    like_program_out 'postgres', "psql -X -Atl --cluster $v/main", 0,
 	qr/template1.*ASCII/, 'template1 is ASCII encoded';
     is ((system "pg_dropcluster $v main --stop"), 0, 'Dropping cluster');
 }

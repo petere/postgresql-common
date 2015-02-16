@@ -44,10 +44,12 @@ sub fail_debug {
 # Return whether a given deb is installed.
 # Arguments: <deb name>
 sub deb_installed {
-    open (DPKG, "dpkg -s $_[0] 2>/dev/null|") or die "call dpkg: $!";
+    open (DPKG, "brew ls|") or die "call brew: $!";
     my $result = 0;
     while (<DPKG>) {
-	if (/^Version:/) {
+	chomp;
+	#print "+ $_ vs $_[0]\n";
+	if ($_ eq $_[0]) {
 	    $result = 1;
 	    last;
 	}
@@ -96,13 +98,13 @@ sub version_ge {
 # Return the user, group, and command line of running processes for the given
 # program.
 sub ps {
-    return `ps h -o user,group,args -C $_[0] | grep '$_[0]' | sort -u`;
+    return `ps -o user=,group=,args= | grep -w '$_[0]' | sort -u`;
 }
 
 # Return array of pids that match the given command line
 sub pidof {
-    open F, '-|', 'ps', 'h', '-C', $_[0], '-o', 'pid,cmd' or die "open: $!";
     my @pids;
+    open F, '-|', 'pgrep', '-f', '-l', $_[0] or die "open: $!";
     while (<F>) {
         if ((index $_, $_[0]) >= 0 && (index $_, '/') >= 0) {
             push @pids, (split)[0];
@@ -114,7 +116,7 @@ sub pidof {
 
 # Return an reference to an array of all entries but . and .. of the given directory.
 sub dircontent {
-    opendir D, $_[0] or die "opendir: $!";
+    opendir D, $_[0] or die "opendir $_[0]: $!";
     my @e = grep { $_ ne '.' && $_ ne '..' } readdir (D);
     closedir D;
     return \@e;
@@ -141,6 +143,7 @@ sub pid_env {
 # Check the contents of a directory.
 # Arguments: <directory name> <ref to expected dir content> <test description>
 sub ok_dir {
+    fail $_[2] unless (-d $_[0]);
     my $content = dircontent $_[0];
     if (eq_set $content, $_[1]) {
 	pass $_[2];
@@ -155,20 +158,21 @@ sub ok_dir {
 # Arguments: <user> <system command> <ref to output> [<expected exit code>]
 # Returns: Program exit code
 sub exec_as {
-    my $uid;
-    if ($_[0] =~ /\d+/) {
-	$uid = int($_[0]);
-    } else {
-	$uid = getpwnam $_[0];
-        defined($uid) or die "TestLib::exec_as: target user '$_[0]' does not exist";
-    }
-    change_ugid ($uid, (getpwuid $uid)[3]);
-    die "changing euid: $!" if $> != $uid;
+#    my $uid;
+#    if ($_[0] =~ /\d+/) {
+#	$uid = int($_[0]);
+#    } else {
+#	$uid = getpwnam $_[0];
+#        defined($uid) or die "TestLib::exec_as: target user '$_[0]' does not exist";
+#    }
+    #change_ugid ($uid, (getpwuid $uid)[3]);
+    #die "changing euid: $!" if $> != $uid;
+    $ENV{PGUSER} = $_[0];
     my $out = `$_[1] 2>&1`;
     my $result = $? >> 8;
-    $< = $> = 0;
-    $( = $) = 0;
-    die "changing euid back to root: $!" if $> != 0;
+    #$< = $> = 0;
+    #$( = $) = 0;
+    #die "changing euid back to root: $!" if $> != 0;
     $_[2] = \$out;
 
     if (defined $_[3] && $_[3] != $result) {
@@ -214,8 +218,8 @@ sub unlike_program_out {
 # of all tests. Does 10 tests.
 sub check_clean {
     is (`pg_lsclusters -h`, '', 'No existing clusters');
-    is ((ps 'postmaster'), '', 'No postmaster processes left behind');
-    is ((ps 'postgres'), '', 'No postgres processes left behind');
+    is (`pgrep postmaster`, '', 'No postmaster processes left behind');
+    is (`pgrep postgres`, '', 'No postgres processes left behind');
     pass ''; # this was pg_autovacuum in the past, which is obsolete
 
     my @check_dirs = ('/etc/postgresql', '/var/lib/postgresql',
@@ -231,7 +235,7 @@ sub check_clean {
     # complain about missing directories
     ok_dir '/var/log/postgresql', [], "No files in /var/log/postgresql left behind";
 
-    is_program_out 0, 'netstat -avptn | grep ":543[2-9]\\b"', 1, '',
+    is_program_out 0, 'netstat -avn -p tcp | grep -v -w CLOSED | grep "\.543[2-9]\\b"', 1, '',
 	'PostgreSQL TCP ports are closed';
 }
 

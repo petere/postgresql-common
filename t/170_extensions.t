@@ -21,6 +21,8 @@ if ($v < '9.1') {
 # create cluster
 is ((system "pg_createcluster $v main --start >/dev/null"), 0, "pg_createcluster $v main");
 
+$ENV{PGDATABASE} = 'postgres';
+
 # plpgsql is installed by default; remove it to simplify test logic
 is_program_out 'postgres', "psql -qc 'DROP EXTENSION plpgsql'", 0, '';
 is_program_out 'postgres', "psql -Atc 'SELECT * FROM pg_extension'", 0, '';

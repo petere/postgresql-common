@@ -60,6 +60,9 @@ sub init_db {
     die 'Internal error: could not determine initdb path' unless $initdb[0];
     if (my $options = $defaultconf{'initdb_options'}) {
 	push @initdb, split (/\s+/, replace_v_c ($options, $version, $cluster));
+        if ($options =~ /^(-\w*A|--auth\b)/) {
+            $explicit_auth_config = 1;
+        }
     }
     push @initdb, ('-D', $datadir);
     if (my $xlogdir = $defaultconf{'xlogdir'}) {

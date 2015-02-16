@@ -9,7 +9,8 @@ use TestLib;
 my $ownver = $MAJORS[-1];
 my $grpver = $MAJORS[0];
 
-use Test::More tests => 36;
+use Test::More;
+plan skip_all => 'not supported';
 
 use lib '/usr/share/postgresql-common';
 use PgCommon;

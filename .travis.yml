@@ -1,0 +1,14 @@
+language: objective-c
+before_install:
+  - brew update
+  - brew tap petere/postgresql
+  - brew list | grep -q -w postgresql && brew unlink postgresql
+install:
+  - brew install postgresql-{8.4,9.0,9.1,9.2,9.3,9.4}
+  - brew install gnu-sed
+  - curl -O http://archive.services.openoffice.org/pub/mirror/OpenOffice.org/contrib/dictionaries/en_US.zip
+  - mkdir -p ~/Library/Spelling
+  - unzip -d ~/Library/Spelling en_US.zip
+script:
+  - make install prefix=/usr/local
+  - /usr/local/share/postgresql-common/testsuite

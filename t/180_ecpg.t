@@ -4,6 +4,7 @@ use strict;
 
 use lib 't';
 use TestLib;
+use File::Temp qw/tempdir/;
 
 use Test::More tests => 19;
 
@@ -13,8 +14,7 @@ use PgCommon;
 my $v = $MAJORS[-1];
 
 # prepare nobody-owned work dir
-my $workdir=`su -s /bin/sh -c 'mktemp -d' nobody`;
-chomp $workdir;
+my $workdir = tempdir(CLEANUP => 1);
 chdir $workdir or die "could not chdir to $workdir: $!";
 
 # create test code
@@ -37,7 +37,7 @@ EOF
 close F;
 chmod 0644, 'test.pgc';
 
-is_program_out 'nobody', 'ecpg test.pgc', 0, '', 'ecpg processing';
+is_program_out 'nobody', '$(pg_config --bindir)/ecpg test.pgc', 0, '', 'ecpg processing';
 
 is_program_out 'nobody', 'cc -I$(pg_config --includedir) -L$(pg_config --libdir) -o test test.c -lecpg',
     0, '', 'compiling ecpg output';

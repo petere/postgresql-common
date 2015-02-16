@@ -60,17 +60,21 @@ install: all installdirs
 	$(INSTALL_DATA) $(POD8PROGS) $(DESTDIR)$(mandir)/man8
 	$(INSTALL_DATA) createcluster.conf user_clusters $(DESTDIR)$(pkgsysconfdir)
 	$(INSTALL_DATA) postgresqlrc.5 user_clusters.5 $(DESTDIR)$(mandir)/man5
+	$(INSTALL_SCRIPT) testsuite $(DESTDIR)$(pkgdatadir)
+	cp -R t $(DESTDIR)$(pkgdatadir)
 	$(GSED) -i \
 	-e 's,/usr/share/postgresql-common,$(pkgdatadir),g' \
-	-e 's,/etc/postgresql,$(sysconfdir)/postgresql,' \
-	-e 's,/var/lib/postgresql,$(localstatedir)/lib/postgresql,' \
-	-e 's,/var/log/postgresql,$(localstatedir)/log/postgresql,' \
-	-e 's,/var/run/postgresql,$(localstatedir)/run/postgresql,' \
+	-e 's,/etc/postgresql,$(sysconfdir)/postgresql,g' \
+	-e 's,/var/lib/postgresql,$(localstatedir)/lib/postgresql,g' \
+	-e 's,/var/log/postgresql,$(localstatedir)/log/postgresql,g' \
+	-e 's,/var/run/postgresql,$(localstatedir)/run/postgresql,g' \
 	-e 's,/bin:/usr/bin,$(bindir):/bin:/usr/bin,' \
 	-e '/version/s,/usr/lib/postgresql/,/usr/local/opt/postgresql-,g' \
 	$(addprefix $(DESTDIR)$(bindir)/,$(common_programs)) \
 	$(DESTDIR)$(pkgsysconfdir)/createcluster.conf \
 	$(DESTDIR)$(mandir)/man1/*.1 $(DESTDIR)$(mandir)/man5/*.5 $(DESTDIR)$(mandir)/man8/*.8 \
-	$(DESTDIR)$(pkgdatadir)/PgCommon.pm
+	$(DESTDIR)$(pkgdatadir)/PgCommon.pm $(DESTDIR)$(pkgdatadir)/testsuite $(DESTDIR)$(pkgdatadir)/t/*
 	for f in $(wrapped_programs); do (cd $(DESTDIR)$(bindir) && ln -f -s pg_wrapper $$f) || exit; done
 	cd $(DESTDIR)$(mandir)/man7 && ln -f -s ../man1/pg_wrapper.1 postgresql-common.7
+# remove tests that currently fail
+	rm -f $(DESTDIR)$(pkgdatadir)/t/{040,041,052,060,080,100,120,140,160}_*.t

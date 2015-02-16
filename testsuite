@@ -47,11 +47,6 @@ while getopts "hf:isu:v:" opt ; do
     esac
 done
 
-if [ "$(id -u)" != 0 ]; then
-    echo "Error: this test suite needs to be run as root" >&2
-    exit 1
-fi
-
 # install packages for versions specified by -v
 # needs network for apt, so run before unshare
 if [ "${INSTALL:-}" ] && [ -z "${UNSHARED:-}" ]; then
@@ -73,72 +68,24 @@ fi
 # requirements on RedHat:
 # perl-Test-Simple perl-Time-HiRes
 
-# re-exec ourselves through unshare
-if [ -z "$UNSHARED" ]; then
-    UNSHARED=1 exec unshare -uimn -- "$0" "$@"
-fi
-
 # shift away args
 shift $(($OPTIND - 1))
 
-# use the local pgcommon.sh (either in the build tree or /usr/share/postgresql-common)
-. ./pgcommon.sh
+mkdir -p /etc/postgresql /etc/postgresql-common /var/lib/postgresql /var/log/postgresql /var/run/postgresql
+PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin
+cd "$(dirname $0)"
 
-# install locales
-locale_gen \
-    en_US.UTF-8 UTF-8 \
-    ru_RU ISO-8859-5 \
-    ru_RU.UTF-8 UTF-8
-
-# stop currently running clusters
-if [ -x "/etc/init.d/postgresql" ]; then
-    /etc/init.d/postgresql stop
-fi
-
-# let everything happen in overlay tmpfses to avoid interfering with already
-# existing clusters; this also speeds up testing
-mount --make-rprivate / 2> /dev/null || : # reset / to private mounts (systemd changes this to shared)
-dirs="/etc/postgresql /etc/postgresql-common /var/lib/postgresql /var/log/postgresql /var/run/postgresql /dev/shm"
-created_dirs=""
-for d in $dirs; do
-    if ! [ -d $d ]; then
-        created_dirs="$created_dirs $d"
-        mkdir -p $d
-    fi
-    mount -n -t tmpfs -o mode=755 tmpfs $d
-done
-# clean up created directories after us
-cleanup () {
-    umount $dirs
-    if [ "$created_dirs" ]; then
-        rmdir --ignore-fail-on-non-empty -p $created_dirs
-    fi
-}
-trap "cleanup" 0 HUP INT QUIT ILL ABRT PIPE TERM
-chown root:postgres /var/log/postgresql
-chmod 1775 /var/log/postgresql
-chown postgres:postgres /var/run/postgresql
-chmod 2775 /var/run/postgresql
-chmod 1777 /dev/shm
-
-# the RPM packages enable the logging_collector by default, which the testsuite
-# doesn't like. We disable it unconditionally here.
-echo "logging_collector = off" >> /etc/postgresql-common/createcluster.conf
+echo "initdb_options = '-A trust -U postgres'" >> /etc/postgresql-common/createcluster.conf
+gsed -i -r 's/^(stats_temp_directory)/#\1/g' /etc/postgresql-common/createcluster.conf
+echo 'PGUSER=postgres' > /etc/postgresql-common/environment
 
 # reset core limit for pg_ctl tests
 ulimit -S -c 0
 
-# start localhost interface
-if [ -x /bin/ip ]; then
-    ip link set dev lo up || true
-else
-    ifconfig lo up || true
-fi
-
 # set environment
 unset TMPDIR
 unset LC_ALL
-export LANG=en_US.utf8
+export LANG=en_US.UTF-8
 
 # set variables which cause taint check errors
 export IFS=' '

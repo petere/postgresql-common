@@ -6,7 +6,12 @@ require File::Temp;
 
 use lib 't';
 use TestLib;
-use Test::More tests => 26;
+use Test::More;
+if( $^O eq 'darwin' ) {
+  plan skip_all => 'does not work on OS X';
+} else {
+  plan tests => 26;
+}
 
 my $outref;
 
