@@ -4,6 +4,7 @@
 # process attached.
 #
 # (C) 2005-2009 Martin Pitt <mpitt@debian.org>
+# (C) 2015-2017 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -31,13 +32,14 @@ if ($#ARGV != 1) {
     exit 1;
 }
 
-($version) = $ARGV[0] =~ /^(\d+\.\d+)$/;
+($version) = $ARGV[0] =~ /^(\d+\.?\d+)$/;
 ($cluster) = $ARGV[1] =~ /^([-.\w]+)$/;
 error 'invalid version' unless defined $version;
 error 'invalid cluster name' unless defined $cluster;
 
 my %info;
 my $c; # configuration directory
+my $startconf;
 
 if (cluster_exists $version, $cluster) {
     %info = cluster_info ($version, $cluster);
@@ -48,13 +50,14 @@ if (cluster_exists $version, $cluster) {
 		    error 'could not stop server, aborting';
 		}
 	    } else {
-		print STDERR "warning: corrupted cluster: data directory does not exist any more, but server is still running; you have to manually kill the postmaster process\n";
+		print STDERR "warning: corrupted cluster: data directory does not exist any more, but server is still running; you have to manually kill the postgres process\n";
 	    }
 	} else {
 	    error 'This cluster is still running. Stop it or supply the --stop option';
 	}
     }
     $c = $info{'configdir'};
+    $startconf = $info{'start'};
 } else {
     $c = "/etc/postgresql/$version/$cluster";
 
@@ -76,8 +79,9 @@ if ($info{'pgdata'} && -d $info{'pgdata'}) {
 unlink $c.'/pg_hba.conf', $c.'/pg_ident.conf', $c.'/postgresql.conf',
     $c.'/start.conf', $c.'/log', $c.'/autovacuum_log', $c.'/pgdata',
     $c.'/environment', $c.'/pg_ctl.conf';
+rmdir $_ foreach (map { /(.*)/ && $1 } glob "$c/*"); # remove empty conf.d directories
 unlink $info{'logfile'} if defined ($info{'logfile'});
-if ($info{'socketdir'} !~ /^(\/tmp|\/var\/run\/postgresql)\/?$/) {
+if ($info{'socketdir'} and $info{'socketdir'} !~ /^(\/tmp|\/var\/run\/postgresql)\/?$/) {
     rmdir $info{'socketdir'};
 }
 rmdir $c;
@@ -89,6 +93,27 @@ unlink "/var/log/postgresql/postgresql-$version-$cluster.log";
 foreach my $f (</var/log/postgresql/postgresql-$version-$cluster.log.[1-9]*>) {
     unlink ($f =~ /(.*)/); # untaint
 }
+# remove stats_temp_directory
+if ($info{statstempdir}) {
+    my $statsowner = (stat($info{statstempdir}))[4];
+    if (defined $statsowner and $statsowner == $info{owneruid}) {
+        foreach my $f (<$info{statstempdir}/*.stat>) {
+            unlink ($f =~ /(.*)/); # untaint
+        }
+        rmdir $info{statstempdir};
+    }
+}
+
+# notify systemd when an autostarted cluster went away
+if (not exists $ENV{'PG_CLUSTER_CONF_ROOT'} and $startconf and $startconf eq 'auto' and -d '/run/systemd/system') {
+    if ($> == 0) {
+        system 'systemctl daemon-reload';
+    } elsif (-t 1) {
+        print "Warning: systemd was not informed about the removed yet. Operations like \"service postgresql start\" might fail. To fix, run:\n";
+        print "  sudo systemctl daemon-reload\n";
+    }
+}
+
 exit 0;
 
 __END__

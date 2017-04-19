@@ -1,7 +1,7 @@
-# Common functionality for postgresql-common selftests
+# Common functionality for postgresql-common self tests
 #
 # (C) 2005-2009 Martin Pitt <mpitt@debian.org>
-# (C) 2013 Christoph Berg <myon@debian.org>
+# (C) 2013-2016 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -22,10 +22,11 @@ use PgCommon qw/get_versions change_ugid/;
 our $VERSION = 1.00;
 our @ISA = ('Exporter');
 our @EXPORT = qw/ps ok_dir exec_as deb_installed rpm_installed package_version
-    version_ge is_program_out like_program_out unlike_program_out pidof pid_env check_clean
+    version_ge program_ok is_program_out like_program_out unlike_program_out
+    pidof pid_env check_clean
     @ALL_MAJORS @MAJORS $delay/;
 
-our @ALL_MAJORS = sort (get_versions()); # not affected by PG_VERSIONS/-v
+our @ALL_MAJORS = sort { $a <=> $b } (get_versions()); # not affected by PG_VERSIONS/-v
 our @MAJORS = $ENV{PG_VERSIONS} ? split (/\s+/, $ENV{PG_VERSIONS}) : @ALL_MAJORS;
 our $delay = 500_000; # 500ms
 
@@ -97,12 +98,14 @@ sub ps {
     return `ps h -o user,group,args -C $_[0] | grep '$_[0]' | sort -u`;
 }
 
-# Return array of pids that match the given command line
+# Return array of pids that match the given command name (we require a leading
+# slash so the postgres children are filtered out)
 sub pidof {
-    open F, '-|', 'ps', 'h', '-C', $_[0], '-o', 'pid,cmd' or die "open: $!";
+    my $prg = shift;
+    open F, '-|', 'ps', 'h', '-C', $prg, '-o', 'pid,cmd' or die "open: $!";
     my @pids;
     while (<F>) {
-        if ((index $_, $_[0]) >= 0 && (index $_, '/') >= 0) {
+        if ((index $_, "/$prg") >= 0) {
             push @pids, (split)[0];
         }
     }
@@ -170,11 +173,21 @@ sub exec_as {
     $_[2] = \$out;
 
     if (defined $_[3] && $_[3] != $result) {
-        print "command '$_[1]' did not exit with expected code $_[3]:\n";
+        print "command '$_[1]' did not exit with expected code $_[3] but with $result:\n";
         print $out;
         fail_debug;
     }
     return $result;
+}
+
+# Execute a command as a particular user, and check the exit code
+# Arguments: <user> <command> [<expected exit code>] [<description>]
+sub program_ok {
+    my ($user, $cmd, $exit, $description) = @_;
+    $exit ||= 0;
+    $description ||= $cmd;
+    my $outref;
+    ok ((exec_as $user, $cmd, \$outref, $exit) == $exit, $description);
 }
 
 # Execute a command as a particular user, and check the exit code and output
@@ -208,11 +221,11 @@ sub unlike_program_out {
 }
 
 # Check that all PostgreSQL related directories are empty and no
-# postmaster processes are running. Should be called at the end
+# postgres processes are running. Should be called at the end
 # of all tests. Does 10 tests.
 sub check_clean {
     is (`pg_lsclusters -h`, '', 'No existing clusters');
-    is ((ps 'postmaster'), '', 'No postmaster processes left behind');
+    pass ''; # was postmaster
     is ((ps 'postgres'), '', 'No postgres processes left behind');
     pass ''; # this was pg_autovacuum in the past, which is obsolete
 
@@ -229,7 +242,7 @@ sub check_clean {
     # complain about missing directories
     ok_dir '/var/log/postgresql', [], "No files in /var/log/postgresql left behind";
 
-    is_program_out 0, 'netstat -avptn | grep ":543[2-9]\\b"', 1, '',
+    is_program_out 0, 'netstat -avptn 2>/dev/null | grep ":543[2-9]\\b"', 1, '',
 	'PostgreSQL TCP ports are closed';
 }
 

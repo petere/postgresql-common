@@ -6,7 +6,7 @@
 #
 # (C) 2005-2009 Martin Pitt <mpitt@debian.org>
 # (C) 2009 Cyril Bouthors <cyril@bouthors.org>
-# (C) 2013-2014 Christoph Berg <myon@debian.org>
+# (C) 2013-2017 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -21,12 +21,12 @@
 use strict;
 use warnings;
 use Getopt::Long;
-use POSIX qw/setsid dup2 setlocale LC_ALL :sys_wait_h/;
+use POSIX qw/setsid dup2 :sys_wait_h/;
 use PgCommon;
-use Fcntl 'SEEK_SET';
+use Fcntl qw(SEEK_SET O_RDWR O_CREAT O_EXCL);
 
 my ($version, $cluster, $pg_ctl, $force);
-my (@postmaster_auxoptions, @pg_ctl_opts_from_cli);
+my (@postgres_auxoptions, @pg_ctl_opts_from_cli);
 my (%postgresql_conf, %info);
 my $mode = 'smart'; # default shutdown mode
 my $foreground = 0; # don't daemonize, use postgres instead of pg_ctl
@@ -108,7 +108,7 @@ sub cluster_port_ready {
     }
 
     if ($out =~ 'FATAL:') {
-	print STDERR "WARNING: connection to the database failed, disabling startup checks:\n$out\n";
+	print STDERR "Warning: connection to the database failed, disabling startup checks:\n$out\n";
 	return cluster_port_running $v, $c, $p;
     }
     return !$result;
@@ -140,18 +140,18 @@ sub start {
         # PG_OOM_ADJUST_VALUE defaults to 0, but can be overridden here
     }
 
-    my $postmaster_opts = '';
+    my $postgres_opts = '';
     my $usd = $version >= 9.3 ? 'unix_socket_directories' : 'unix_socket_directory';
     if (!(PgCommon::get_conf_value $version, $cluster, 'postgresql.conf', $usd)) {
-	$postmaster_opts .= "-c $usd=\"$info{'socketdir'}\"";
+	$postgres_opts .= "-c $usd=\"$info{'socketdir'}\"";
     }
 
-    $postmaster_opts .= " -c config_file=\"$cdir/postgresql.conf\""; 
+    $postgres_opts .= " -c config_file=\"$cdir/postgresql.conf\"";
     if (!(PgCommon::get_conf_value $version, $cluster, 'postgresql.conf', 'hba_file')) {
-        $postmaster_opts .= " -c hba_file=\"$cdir/pg_hba.conf\"";
+        $postgres_opts .= " -c hba_file=\"$cdir/pg_hba.conf\"";
     }
     if (!(PgCommon::get_conf_value $version, $cluster, 'postgresql.conf', 'ident_file')) {
-        $postmaster_opts .= " -c ident_file=\"$cdir/pg_ident.conf\""; 
+        $postgres_opts .= " -c ident_file=\"$cdir/pg_ident.conf\"";
     }
 
     if ((-d '/var/run/postgresql') && !defined (PgCommon::get_conf_value $version, $cluster, 'postgresql.conf', 'external_pid_file')) {
@@ -166,12 +166,12 @@ sub start {
             $vrp_writable = -w '/var/run/postgresql';
         }
         if ($vrp_writable) {
-            $postmaster_opts .= " -c external_pid_file=\"/var/run/postgresql/$version-$cluster.pid\"";
+            $postgres_opts .= " -c external_pid_file=\"/var/run/postgresql/$version-$cluster.pid\"";
         }
     }
 
-    $postmaster_opts .= ' ' . (join ' ', @postmaster_auxoptions);
-    ($postmaster_opts) = $postmaster_opts =~ /(.*)/; # untaint
+    $postgres_opts .= ' ' . (join ' ', @postgres_auxoptions);
+    ($postgres_opts) = $postgres_opts =~ /(.*)/; # untaint
 
     if ($foreground) {
         if ($stdlog and $info{'logfile'}) {
@@ -179,7 +179,7 @@ sub start {
             dup2(POSIX::open($info{logfile}, POSIX::O_WRONLY|POSIX::O_APPEND), 2);
         }
         my $postgres = get_program_path 'postgres', $version;
-        exec '/bin/sh', '-c', "exec $postgres $postmaster_opts" or
+        exec '/bin/sh', '-c', "exec $postgres $postgres_opts" or
             error "Executing $postgres failed: $!"
     }
 
@@ -199,16 +199,28 @@ sub start {
     push @options, split(' ', $pg_ctl_opts_from_file{'pg_ctl_options'})
 	if defined $pg_ctl_opts_from_file{'pg_ctl_options'} and $pg_ctl_opts_from_file{'pg_ctl_options'} ne '';
 
-    push @options, ('-s', '-o', $postmaster_opts);
+    push @options, ('-s', '-o', $postgres_opts);
 
     if (fork) {
         wait;
-        error "could not exec $pg_ctl @options: $!" if $?;
+        if ($?) {
+            my $exit = $? >> 8;
+            print STDERR "Error: $pg_ctl @options exited with status $exit: $!\n";
+            my $currlogsize = (stat $info{'logfile'})[7] if $info{'logfile'} && -r $info{'logfile'};
+            if ($currlogsize) {
+                open LOG, $info{'logfile'} or
+                    error "Could not open log file " . $info{'logfile'};
+                seek LOG, $logsize, SEEK_SET;
+                print STDERR $_ while <LOG>;
+            }
+            exit $exit;
+        }
     } else {
         setsid or error "could not start session: $!";
-	# without this, you'll get zombies on startup
-        dup2(POSIX::open('/dev/null', POSIX::O_WRONLY), 1);
-        dup2(POSIX::open('/dev/null', POSIX::O_WRONLY), 2);
+        # without dup2, you'll get zombies on startup
+        my $output = $info{'logfile'} && -r $info{'logfile'} ? $info{'logfile'} : '/dev/null';
+        dup2(POSIX::open($output, POSIX::O_WRONLY | POSIX::O_APPEND | POSIX::O_CREAT), 1);
+        dup2(POSIX::open($output, POSIX::O_WRONLY | POSIX::O_APPEND | POSIX::O_CREAT), 2);
         exec $pg_ctl @options or error "could not exec $pg_ctl @options: $!";
     }
 
@@ -320,11 +332,15 @@ sub promote {
 # main
 #
 
-exit 1 unless GetOptions ('o|options=s' => \@postmaster_auxoptions,
+my ($skip_systemctl_redirect, $bindir);
+
+exit 1 unless GetOptions ('o|options=s' => \@postgres_auxoptions,
     'f|force' => \$force,
     'm|mode=s' => \$mode,
     'foreground' => \$foreground,
+    'skip-systemctl-redirect' => \$skip_systemctl_redirect,
     'stdlog' => \$stdlog,
+    'bindir=s' => \$bindir,
 );
 
 if ($mode =~ /^(s(mart)?|f(ast)?|i(mmediate)?)$/) {
@@ -334,6 +350,8 @@ if ($mode =~ /^(s(mart)?|f(ast)?|i(mmediate)?)$/) {
     exit 1;
 }
 
+($bindir) = $bindir =~ /^(\/.*)$/ if $bindir; # untaint
+
 # accept both "version cluster action" and "version[-/]cluster action"
 if (@ARGV < 2 or (@ARGV < 3 and $ARGV[0] !~ m![-/]!)) {
     print "Usage: $0 <version> <cluster> <action>\n";
@@ -341,7 +359,7 @@ if (@ARGV < 2 or (@ARGV < 3 and $ARGV[0] !~ m![-/]!)) {
 }
 
 $version = shift @ARGV;
-if ($version =~ m!^(\d+\.\d)[-/](.+)!) {
+if ($version =~ m!^(\d+\.?\d)[-/](.+)!) {
     ($version, $cluster) = ($1, $2);
 } else {
     $cluster = shift @ARGV;
@@ -353,7 +371,7 @@ foreach my $argv (@ARGV) {
     push @pg_ctl_opts_from_cli, $argv =~ /(.*)/; # untaint
 }
 
-($version) = $version =~ /^(\d+\.\d+)$/; # untaint
+($version) = $version =~ /^(\d+\.?\d+)$/; # untaint
 ($cluster) = $cluster =~ /^([^'"\s]+)$/; # untaint
 error 'specified cluster does not exist' unless $version && $cluster && cluster_exists $version, $cluster;
 %info = cluster_info ($version, $cluster);
@@ -386,6 +404,44 @@ if (($< == 0 or $> == 0) and $info{'configuid'} != 0 and
     error "Config owner ($configowner:$info{configuid}) and data owner ($dataowner:$info{owneruid}) do not match, and config owner is not root";
 }
 
+# redirect the request through systemd
+if (not $skip_systemctl_redirect and getppid() != 1 and # not run from init
+    -d '/run/systemd/system' and not exists $ENV{_SYSTEMCTL_SKIP_REDIRECT} and # systemd is running
+    not exists $ENV{'PG_CLUSTER_CONF_ROOT'} and # not handling user clusters
+    $action =~ /^(start|stop|restart)$/ # redirect only these actions
+) {
+    $action = $1; # untaint
+    system 'systemctl', 'is-active', '-q', "postgresql\@$version-$cluster";
+    my $unit_active = $? == 0;
+
+    # if extra options are given, proceed with pg_ctlcluster with a warning
+    if (@postgres_auxoptions != 0 or @pg_ctl_opts_from_cli != 0 or $bindir) { # extra options given
+        print "Notice: extra pg_ctl/postgres options given, bypassing systemctl for $action operation\n" if (-t 1);
+    # if we are root, redirect to systemctl unless stopping a cluster running outside systemd
+    } elsif ($> == 0) {
+        if ($action eq 'stop' and not $unit_active) {
+            # proceed with pg_ctlcluster
+        } else {
+            print "Redirecting $action request to systemctl\n" if (-t 1);
+            system 'systemctl', $action, "postgresql\@$version-$cluster";
+            exit $? >> 8;
+            # program end
+        }
+    # as non-root, raise an error on restarting a cluster running from systemd
+    } elsif ($action eq 'restart' and $unit_active) {
+        error "cluster is running from systemd, can only restart it as root. Try instead:\n  sudo systemctl $action postgresql\@$version-$cluster";
+        # program end
+    # otherwise just raise a warning on start and restart as non-root
+    } elsif (-t 1) {
+        if ($action =~ /start/) {
+            print "Warning: the cluster will not be running as a systemd service. Consider using systemctl:\n";
+        } elsif ($unit_active) { # on stop, warn when running from systemd
+            print "Warning: stopping the cluster using pg_ctlcluster will mark the systemd unit as failed. Consider using systemctl:\n";
+        }
+        print "  sudo systemctl $action postgresql\@$version-$cluster\n";
+    }
+}
+
 # recreate missing standard log dir
 if ($> == 0 && ! -e '/var/log/postgresql' &&
     $info{'logfile'} =~ m!^/var/log/postgresql!) {
@@ -394,17 +450,20 @@ if ($> == 0 && ! -e '/var/log/postgresql' &&
 
 # recreate missing log file
 if ($action ne 'stop' && $info{'logfile'} && ! -e $info{'logfile'}) {
-    open L, '>', $info{'logfile'} or 
-	error 'Could not create log file ' . $info{'logfile'};
-    chmod 0640, $info{'logfile'};
-    my $g;
-    if ($info{'owneruid'} < 500) {
-	$g = (getgrnam 'adm')[2];
-    } else {
-	$g = $info{'ownergid'};
+    if ($> == 0) { # drop privileges; this is important if logfile
+        # was determined via an /etc/postgresql/.../log symlink
+        change_ugid $info{'owneruid'}, $info{'ownergid'};
     }
-    chown $info{'owneruid'}, $g, $info{'logfile'};
+    sysopen (L, $info{'logfile'}, O_RDWR|O_CREAT|O_EXCL) or
+	error 'Could not create log file ' . $info{'logfile'};
     close L;
+    chmod 0640, $info{'logfile'};
+    $< = $> = 0; # will silently fail if we were not root before, that's intended
+    $( = $) = 0;
+    if ($info{'owneruid'} < 500) {
+        my $g = (getgrnam 'adm')[2];
+        chown $info{'owneruid'}, $g, $info{'logfile'} if (defined $g);
+    }
 }
 
 # recreate /var/run/postgresql
@@ -420,9 +479,9 @@ if ($action ne 'stop' && $info{'statstempdir'} && ! -d $info{'statstempdir'}) {
 }
 
 if ($> == 0) {
-    # have postgres start with increased OOM killer protection; 9.1 and
+    # have postgres start with increased OOM killer protection; 9.0 and
     # later has builtin support for resetting the adjustment of child processes
-    if ($action eq 'start' and $version >= '9.1' and not $PgCommon::rpm) {
+    if ($action eq 'start' and $version >= '9.0' and not $PgCommon::rpm) {
         if (-w '/proc/self/oom_score_adj') {
 	    open F, '>/proc/self/oom_score_adj';
 	    print F "-900\n";
@@ -441,7 +500,7 @@ if( $> != $info{'owneruid'} ) {
         (getpwuid $info{'owneruid'})[0].') or root';
 }
 
-$pg_ctl = get_program_path 'pg_ctl', $version;
+$pg_ctl = $bindir ? "$bindir/pg_ctl" : get_program_path ('pg_ctl', $version);
 
 if ($action =~ /^(start|stop|restart|reload|status|promote)$/) {
     no strict 'refs';
@@ -542,6 +601,10 @@ Start B<postgres> in foreground, without daemonizing via B<pg_ctl>.
 
 When B<--foreground> is in use, redirect stderr to the standard logfile in
 C</var/log/postgresql/>.  (Default when not run in foreground.)
+
+=item B<--bindir> I<directory>
+
+Path to B<pg_ctl>.  (Default is C</usr/lib/postgresql/>I<version>C</bin>.)
 
 =item B<-o>|B<--options> I<option>
 

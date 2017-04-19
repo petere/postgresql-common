@@ -4,7 +4,7 @@
 # the postgresql-common infrastructure.
 #
 # (C) 2005-2013 Martin Pitt <mpitt@debian.org>
-# (C) 2012-2014 Christoph Berg <myon@debian.org>
+# (C) 2012-2017 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -57,7 +57,7 @@ sub init_db {
 
     # disable copy-on-write semantics for PostgreSQL data on btrfs and similar;
     # this fails on file systems which don't support it, so ignore errors
-    system "chattr -V +C '$datadir' 2>/dev/null";
+    system "chattr +C '$datadir' 2>/dev/null";
 
     my @initdb = (get_program_path 'initdb', $version);
     die 'Internal error: could not determine initdb path' unless $initdb[0];
@@ -229,7 +229,10 @@ exit 1 unless GetOptions ('u|user=s' => \$owneruid, 'g|group=s' => \$ownergid,
 
 # check validity of locale
 unless (setlocale (LC_ALL, "")) {
-    error ('The locale requested by the environment is invalid.')
+    my $env = join "\n",
+        map { "  $_: $ENV{$_}" }
+        grep { /^(LC_|LANG)/ } sort keys %ENV;
+    error ("The locale requested by the environment is invalid:\n$env")
 }
 
 if (@ARGV < 2) {
@@ -281,10 +284,13 @@ if ($ownergid) {
 
 error 'clusters must not be owned by root' unless $owneruid && $ownergid;
 
-($version) = $ARGV[0] =~ /^(\d+\.\d+)$/;
+($version) = $ARGV[0] =~ /^(\d+\.?\d+)$/;
 error "invalid version '$ARGV[0]'" unless defined $version;
 ($cluster) = $ARGV[1] =~ /^([-.\w]+)$/;
 error "invalid cluster name '$ARGV[1]'" unless defined $cluster;
+if ($cluster =~ /-/ and -t 1) {
+    print "Warning: cluster names containing dashes (-) will cause problems when running from systemd. Continuing anyway\n";
+}
 splice @ARGV, 0, 2;
 
 # initdb options passed after --
@@ -297,6 +303,7 @@ foreach my $argv (@ARGV) {
     push @initdb_opts_from_cli, $argv =~ /(.*)/; # untaint
 }
 
+my $datadirp_created;
 if (!defined $datadir) {
     $datadir = replace_v_c ($defaultconf{'data_directory'} || "/var/lib/postgresql/%v/%c", $version, $cluster);
     $datadir =~ s!/+$!!;
@@ -307,8 +314,8 @@ if (!defined $datadir) {
     # it can be administrated without root permissions
     if (!stat $pd) {
         system 'install', '-d', '-o', $postgres_user[2], '-g', $postgres_user[3], $pd;
+        $datadirp_created = $pd; # clean up in case of error
     }
-
 }
 $confdirp = "$PgCommon::confroot/$version";
 $confdir = "$confdirp/$cluster";
@@ -336,12 +343,12 @@ if (defined $port) {
 if (!stat $confdirp) {
     system 'install', '-d', '-o', $postgres_user[2], '-g', $postgres_user[3], $confdirp;
 }
-error 'could not create configuration directory; you might ' .
-    'need to run this program with root privileges' if system ('install', '-d', $confdir);
-
 # now we created the first new directory for this cluster and start to rollback
 # on error
 $cleanup_cruft = 1;
+
+error 'could not create configuration directory; you might ' .
+    'need to run this program with root privileges' if system ('install', '-d', $confdir);
 
 # check whether we have an already existing cluster; check version and
 # determine owner in this case
@@ -361,9 +368,11 @@ if (-f "$datadir/PG_VERSION") {
         error "$datadir already contains a version $existingver cluster";
     }
 } else {
-    my $loc = setlocale (LC_CTYPE);
+    my $loc = $locale || setlocale (LC_CTYPE);
     print "Creating new cluster $version/$cluster ...\n";
-    print "  config $confdir\n  data   $datadir\n  locale $loc\n";
+    print "  config $confdir\n";
+    print "  data   $datadir\n";
+    print "  locale $loc\n";
     init_db $version, $datadir, $owneruid, $ownergid, \@initdb_opts_from_cli;
     $newcluster = 1;
 }
@@ -406,14 +415,10 @@ unless ($socketdir) {
 	$socketdir = '/var/run/postgresql';
     } else {
         $socketdir='/tmp';
-	my $usd = $version >= 9.3 ? 'unix_socket_directories' : 'unix_socket_directory';
-	print "Warning: The socket directory for owners other than 'postgres'
-defaults to /tmp. You might want to change the $usd parameter
-in postgresql.conf to a more secure directory.
-"
     }
 }
-set_cluster_socketdir $version, $cluster, $socketdir if $socketdir;
+print "  socket $socketdir\n";
+set_cluster_socketdir $version, $cluster, $socketdir;
 $> = $orig_euid;
 $) = $orig_egid;
 
@@ -428,6 +433,7 @@ if (! -d '/var/log/postgresql') {
     chown 0, $postgres_user[3], '/var/log/postgresql';
 }
 $real_logfile = $custom_logfile || "/var/log/postgresql/postgresql-$version-$cluster.log";
+error "logfile $real_logfile is a directory, not a file" if (-d $real_logfile);
 if (! -e $real_logfile) {
     open L, ">>$real_logfile" or error "could not create log file $real_logfile";
     close L;
@@ -464,7 +470,8 @@ change_ugid $owneruid, $ownergid;
 $ssl_key_access = -r $ssl_key_file;
 
 # check for stats_temp_directory access
-if ($defaultconf{stats_temp_directory} and $version >= 8.4) {
+delete $defaultconf{stats_temp_directory} if ($version < 8.4);
+if ($defaultconf{stats_temp_directory}) {
     my $stats_temp_directory = replace_v_c ($defaultconf{stats_temp_directory}, $version, $cluster);
     $stats_temp_directory =~ s!/$!!; # strip trailing slash
     my $stats_temp_parent = $stats_temp_directory;
@@ -538,7 +545,7 @@ if ($want_ssl && $newcluster && -e "$PgCommon::common_confdir/root.crl") {
 }
 
 # create default (empty) environment file
-my $defaultenv = "# environment variables for postmaster process
+my $defaultenv = "# environment variables for postgres processes
 # This file has the same syntax as postgresql.conf:
 #  VARIABLE = simple_value
 #  VARIABLE2 = 'any value!'
@@ -569,13 +576,33 @@ if ($socketdir eq '/var/run/postgresql') {
 # handle other createcluster.conf parameters
 foreach my $guc (sort keys %defaultconf) {
     next if $guc =~ /^(create_main_cluster|start_conf|data_directory|xlogdir|initdb_options|ssl)$/;
+    next if $guc eq 'logging_collector' and $version < 8.3;
+    next if $guc eq 'cluster_name' and $version < 9.5;
     my $val = replace_v_c ($defaultconf{$guc}, $version, $cluster);
+    $guc =~ s/^add_include/include/; # remove harness from include directives in createcluster.conf
+    if ($guc eq 'include_dir') {
+        next if ($version < 9.3);
+        if ($val =~ /^[\w.]+$/ and not -e "$confdir/$val") { # create directory relative to new config directory
+            mkdir "$confdir/$val", 0755;
+            chown $owneruid, $ownergid, "$confdir/$val";
+        }
+    }
     PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', $guc, $val;
 }
 
 # process --pgoption parameters
 foreach my $guc (@pgoptions) {
     PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', $guc->[0], $guc->[1];
+}
+
+# notify systemd about the new cluster
+if (not exists $ENV{'PG_CLUSTER_CONF_ROOT'} and $startconf eq 'auto' and -d '/run/systemd/system') {
+    if ($> == 0) {
+        system 'systemctl daemon-reload';
+    } elsif (-t 1) {
+        print "Warning: systemd does not know about the new cluster yet. Operations like \"service postgresql start\" will not handle it. To fix, run:\n";
+        print "  sudo systemctl daemon-reload\n";
+    }
 }
 
 # start it if requested
@@ -587,6 +614,7 @@ END {
     # clean up cruft if something went wrong
     if ($cleanup_cruft && defined $version && defined $cluster) {
 	system "pg_dropcluster $version $cluster 2>/dev/null";
+        rmdir $datadirp_created if ($datadirp_created); # clean up after early errors which pg_dropcluster doesn't handle
 	exit 1;
     }
 }
@@ -604,7 +632,7 @@ B<pg_createcluster> [I<options>] I<version> I<name> [B<--> I<initdb options>]
 =head1 DESCRIPTION
 
 B<pg_createcluster> creates a new PostgreSQL server cluster (i. e. a
-collection of databases served by a L<postmaster(1)> instance) and
+collection of databases served by a L<postgres(1)> instance) and
 integrates it into the multi-version/multi-cluster architecture of the
 B<postgresql-common> package. 
 
@@ -614,6 +642,10 @@ package is C<main>. However, you might wish to create other clusters for
 testing, with other superusers, a cluster for each user on a shared server,
 etc. C<pg_createcluster> will abort with an error if you try to create a
 cluster with a name that already exists for that version.
+
+For compatibility with B<systemd> service units, the cluster name should not
+contain any dashes (B<->). B<pg_ctlcluster> will warn about the problem, but
+succeed with the operation.
 
 Given a major PostgreSQL I<version> (like "8.2" or "8.3") and a cluster
 I<name>, it creates the necessary configuration files in
@@ -681,7 +713,7 @@ C</var/lib/postgresql/>I<version>C</>I<cluster>.
 
 =item B<-s> I<dir>, B<--socketdir=>I<dir>
 
-Explicitly set the directory where the L<postmaster(1)> server stores the Unix
+Explicitly set the directory where the L<postgres(1)> server stores the Unix
 socket for local connections. Defaults to C</var/run/postgresql/> for clusters
 owned by the user B<postgres>, and C</tmp> for clusters owned by other users.
 Please be aware that C</tmp> is an unsafe directory since everybody can create
@@ -690,7 +722,7 @@ not exist, it is created with appropriate permissions.
 
 =item B<-l> I<path>, B<--logfile=>I<path>
 
-Explicitly set the path for the L<postmaster(1)> server log file. Defaults to
+Explicitly set the path for the L<postgres(1)> server log file. Defaults to
 C</var/log/postgresql/postgresql->I<version>C<->I<cluster>C<.log>.
 
 =item B<--locale=>I<locale>
@@ -776,7 +808,7 @@ will be left untouched.
 =head1 STARTUP CONTROL
 
 The C<start.conf> file in the cluster configuration directory controls the
-start/stop behavior of that cluster's postmaster process. The file can contain
+start/stop behavior of that cluster's postgres process. The file can contain
 comment lines (started with '#'), empty lines, and must have exactly one
 line with one of the following keywords:
 
@@ -784,25 +816,36 @@ line with one of the following keywords:
 
 =item B<auto>
 
-The postmaster process is started/stopped automatically in the init script.
+The postgres process is started/stopped automatically in the init script.
+
+When running from B<systemd>, the cluster is started/stopped when
+B<postgresql.service> is started/stopped.
 This is also the default if the file is missing.
 
 =item B<manual>
 
-The postmaster process is not handled by the init script, but manually
+The postgres process is not handled by the init script, but manually
 controlling the cluster with L<pg_ctlcluster(1)> is permitted.
+
+When running from B<systemd>, the cluster is not started automatically when
+B<postgresql.service> is started. However, stopping/restarting
+B<postgresql.service> will stop/restart the cluster. The cluster can be started
+using B<systemctl start postgresql@>I<version>B<->I<cluster>.
 
 =item B<disabled>
 
-Neither the init script nor L<pg_ctlcluster(1)> are permitted to start/stop the
+Neither the init script, L<pg_ctlcluster(1)>, nor B<postgresql@.service> are permitted to start/stop the
 cluster. Please be aware that this will not stop the cluster owner from calling
-lower level tools to control the postmaster process; this option is only meant
+lower level tools to control the postgres process; this option is only meant
 to prevent accidents during maintenance, not more.
 
 =back
 
+When running from B<systemd>, invoke B<systemctl daemon-reload> after editing
+C<start.conf>.
+
 The C<pg_ctl.conf> file in the cluster configuration directory can contain
-additional options passed to pg_ctl of that cluster.
+additional options passed to B<pg_ctl> of that cluster.
 
 =head1 DEFAULT VALUES
 
@@ -859,6 +902,30 @@ are readable for the cluster owner as detailed above.
 
 Only added to postgresql.conf if existing, and writable for the cluster owner,
 or else if the parent directory is writable.
+
+=back
+
+=item Include files
+
+=over 4
+
+=item B<include>
+
+=item B<include_if_exists>
+
+=item B<include_dir>
+
+B<createcluster.conf> supports the same include directives as
+B<postgresql.conf>.
+
+=item B<add_include>
+
+=item B<add_include_if_exists>
+
+=item B<add_include_dir>
+
+To add include directives to the new postgresql.conf file, use the B<add_*>
+directives. The B<add_> prefix is removed.
 
 =back
 

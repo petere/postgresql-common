@@ -26,7 +26,7 @@ but if you want to get straight into playing SQL, here are the steps to create
 a database user and a database for the Unix user 'joe':
 
 1. Install a database server with the major version of your choice
-   ('postgresql-X.Y', e. g. 'postgresql-9.1').  Preferrably the latest
+   ('postgresql-X.Y', e. g. 'postgresql-9.1').  Preferably the latest
    version, which you can get by installing the metapackage
    'postgresql'. This will automatically create a default cluster
    'main' with the database superuser 'postgres'.
@@ -72,6 +72,7 @@ manual page):
                        restart).
    pg_lsclusters     - Show a list of all existing clusters and their status.
    pg_upgradecluster - Migrate a cluster from one major version to another one.
+   pg_renamecluster  - Rename a cluster.
 
 Please note that you can of course also use the upstream tools for
 creating clusters, such as initdb(1). However, please note that in

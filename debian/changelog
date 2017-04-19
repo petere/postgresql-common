@@ -1,3 +1,279 @@
+postgresql-common (179) unstable; urgency=medium
+
+  * Catch all pg_ctl output by redirecting it to /var/log/postgresql.
+    (Closes: #830485)
+  * Dump locale environment variables if setlocale fails.
+    (Closes: #848869)
+  * Set default log_line_prefix to '%m [%p] %q%u@%d ' to match upstream
+    moving to '%m [%p] ' in PostgreSQL 10.
+  * Support include_dir in read_conf_file. Patch by Andreas Dewes, thanks!
+  * Support adding include directives to the new postgresql.conf from
+    createcluster.conf; harness directives with an "add_" prefix, e.g.
+    "add_include_dir".
+  * Import new apt.postgresql.org key.
+  * Support 9.6 for jessie-backports.
+
+ -- Christoph Berg <myon@debian.org>  Tue, 24 Jan 2017 23:03:12 +0100
+
+postgresql-common (178) unstable; urgency=medium
+
+  [ Christoph Berg ]
+  * pg_buildext: Don't ask pg_virtualenv for a new network namespace by
+    default.
+  * postgresql-all: New meta package depending on all server packages in all
+    supported versions. Intended to be used for installing test dependencies.
+  * pg_upgradecluster: Properly upgrade databases with non-login role owners.
+    (Closes: #614374, #838812)
+  * pg_upgradecluster, pg_renamecluster: Update cluster_name.
+  * Rebuild upgrades libreadline to 7 in unstable. (Closes: #845356)
+  * Replace most occurrences of "postmaster" by "postgres". Notable leftover
+    is the postmaster.1.gz leader of the manpages alternatives group.
+  * pg_ctlcluster, t/020_create_sql_remove.t: Protect against symlink in
+    /var/log/postgresql/ allowing the creation of arbitrary files elsewhere.
+    Discovered by Dawid Golunski, thanks! (CVE-2016-1255)
+
+  [ Martin Pitt ]
+  * debian/supported-versions: Add Ubuntu 17.04, drop EOLed releases.
+  * t/TestLib.pm, check_clean(): Quiesce stderr of netstat, which shows a "Not
+    all processes could be identified" warning in unprivileged containers.
+
+ -- Christoph Berg <myon@debian.org>  Tue, 20 Dec 2016 17:11:15 +0100
+
+postgresql-common (177) unstable; urgency=medium
+
+  [ Martin Pitt ]
+  * Replace hardcoded Recommends: libreadline6 with a build-time detection of
+    the current ABI.
+
+  [ Christoph Berg ]
+  * Team upload.
+  * Mark 9.6 as stable for apt.postgresql.org.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Wed, 28 Sep 2016 11:55:12 +0200
+
+postgresql-common (176) unstable; urgency=medium
+
+  * Team upload.
+  * Bump default PostgreSQL server version to 9.6.
+  * Use C.UTF-8 instead of C when the initial main cluster is created and no
+    locale is configured explicitly as system default. (Closes: #790507)
+  * Support "NN" major version numbers, next version will be PostgreSQL 10.
+  * debian/postgresql-common.templates: Properly mark not-to-be-translated
+    shell code-only chunk as such using flag:translate. Thanks to Rhonda for
+    the pointer! (See: #820756, #832282)
+  * testsuite: Run with umask 077 only by default.
+  * t/025_logging.t: Fix tests when grep thinks syslog is a binary file.
+  * t/031_errors_disk_full.t: Raise tmpfs size to account for larger cluster
+    footprint observed on ppc64el.
+  * t/032_ssl_key_permissions.t: Skip tests on 9.0 and earlier.
+  * pg_createcluster, t/025_logging.t: Skip logging_collector for 8.2.
+  * Ship /etc/postgresql-common/supported_versions even in non-backport
+    packages. (Closes: #808353)
+  * pg_createcluster: Error out if provided log file is a directory.
+    (Closes: #791556)
+  * pg_upgradecluster: Set dynamic_shared_memory_type from the new
+    postgresql.conf instead of defaulting to mmap. (Closes: #823209)
+  * pg_upgradecluster: Use data checksums in the new cluster if the old uses
+    them. (Closes: #830228)
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Fri, 23 Sep 2016 12:32:16 +0200
+
+postgresql-common (175) unstable; urgency=medium
+
+  * pg_createcluster, createcluster.conf: Set cluster_name on 9.5+.
+  * pg_buildext: Don't set any CFLAGS by default.
+  * start.conf: Update documentation/comments to recommend running
+    systemctl daemon-reload.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Thu, 23 Jun 2016 12:26:27 +0200
+
+postgresql-common (174) unstable; urgency=medium
+
+  [ Christoph Berg ]
+  * postgresql-common: Enforce strict version dependency on
+    postgresql-client-common to avoid API mismatch bugs in PgCommon.pm.
+  * maintscripts-functions: Save pg_dump on catversion bumps as well.
+  * Updated ja translation by Takuma Yamada, thanks! (Closes: #820756)
+  * Remove not-to-be-translated shell code-only chunk from
+    debian/po/templates.pot. (debconf-updatepo --skip-pot to the rescue!)
+    (Closes: #821445)
+
+  [ Martin Pitt ]
+  * debian/supported-versions: Add Ubuntu 16.10.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Wed, 11 May 2016 15:04:25 +0200
+
+postgresql-common (173) unstable; urgency=medium
+
+  [ Christoph Berg ]
+  * README.Debian: Fix a typo.
+  * Updated nl translation, thanks Frans Spiesschaert! (Closes: #812353)
+  * Updated ru translation, thanks Sergey Alyoshin! (Closes: #815596)
+  * Updated ja translation, thanks Takuma Yamada! (Closes: #816069)
+  * preinst_check_catversion: Handle missing catalog version file.
+  * pg_renamecluster: Don't try to rename a non-existing stats directory.
+  * pg_conftool: Refuse operation on non-existing clusters.
+  * maintscript-functions, templates: Remove '#' characters from upgrade
+    instructions on catalog version change for easier cut-and-paste.
+  * t/032_ssl_key_permissions.t: Validate server snakeoil key checks.
+  * pgdg/apt.postgresql.org.sh: Add xenial and trusty.
+
+  [ Adam Conrad ]
+  * pgcommon.sh: Adjust for >= xenial using Debian-style locale generation
+    methods, and allow fallback to the old Ubuntu method for old releases.
+
+ -- Christoph Berg <myon@debian.org>  Wed, 30 Mar 2016 15:08:06 +0200
+
+postgresql-common (172) unstable; urgency=medium
+
+  [ Christoph Berg ]
+  * pg_buildext: Mute diff warning about missing debian/tests/control.in.
+  * pg_ctlcluster: Skip systemctl redirect with --bindir.
+  * pg_createcluster: Drop warning if /tmp is used as socket directory.
+    Instead, just print the socket directory on cluster creation.
+  * Update French debconf translations, thanks Julien Patriarca!
+    (Closes: #809800)
+  * 9.5 released! Setting as default.
+
+  [ Martin Pitt ]
+  * debian/supported-versions: Switch Ubuntu 16.04 to 9.5.
+  * debian/supported-versions: Drop obsolete Ubuntu versions.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Thu, 07 Jan 2016 15:13:06 +0100
+
+postgresql-common (171) unstable; urgency=medium
+
+  [ Christoph Berg ]
+  * pgdg: Deprecate 8.4 and 9.0.
+  * Enable 9.4 for wheezy-backports.
+  * pg_createcluster: Fix stats_temp_directory handling on 8.3, thanks to
+    Marco Nenciarini for the inital patch.
+  * pg_createcluster: Mute verbose chattr output.
+  * pg_conftool: Don't quote output in '-s'hort mode.
+  * debian/maintscripts-functions: If the catalog version changes in
+    devel/alpha versions, save a minimal copy of the old version binaries in
+    the preinst to enable using pg_upgrade. Use debconf in the postinst to
+    instruct the user how to proceed with the upgrade.
+  * pg_buildext: Replace multiple occurrences of PGVERSION on the same line,
+    and implement replacing for debian/tests/control.in.
+  * t/015_start_stop.t: Validate pg_ctlcluster/systemctl exit codes.
+  * pg_ctlcluster: Redirect requests to systemd when invoked as root and no
+    extra pg_ctl or postgres options are given.
+    Trying to start already running clusters clusters will return 0 now
+    (was 2 in the native implementation). (Closes: #784878)
+  * pg_createcluster, pg_renamecluster: Warn on cluster names with dashes.
+  * pg_upgradecluster: Deprecate ssl_renegotiation_limit in 9.5.
+
+  [ Martin Pitt ]
+  * pg_upgradecluster: Fix "ANALZYE" typo.
+  * debian/supported-versions: Add Ubuntu 16.04.
+  * Update Turkish debconf translations, thanks Atila KOÇ!
+    (Closes: #799274)
+  * t/020_create_sql_remove.t: Skip postmaster OOM killer adjustment when
+    running in a container, as these often have restricted privileges.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Fri, 18 Dec 2015 16:22:37 +0100
+
+postgresql-common (170) unstable; urgency=medium
+
+  [ Christoph Berg ]
+  * pg_createcluster, pg_dropcluster: When an auto-started cluster is created/
+    dropped by root, notify systemd to update the dependencies of
+    postgresql.service.wants.
+  * pg_dropcluster, pg_renamecluster: Handle stats_temp_directory.
+  * testsuite, pg_virtualenv: Remove the unshare hack, too much trouble.
+  * pg_buildext, pg_virtualenv: Add PG_VIRTUALENV_NEWPID and
+    PG_VIRTUALENV_UNSHARE variables; pg_buildext selects unshare -n by default.
+  * t/025_logging.t: Improve syslog detection in the test environment.
+  * pg_upgradecluster, t/030_errors.t: Unbreak after we changed the old=new
+    error message.
+  * PgCommon.pm: make read_cluster_conf_file read postgresql.auto.conf as well
+    (Closes: #787154)
+  * pg_upgradecluster: Support upgrading tablespaces. (Closes: #772202)
+  * t/TestLib.pm: New function program_ok().
+  * t/040_upgrade.t: Skip testing pg_upgrade with datallowconn = f, it does
+    not support that anymore as of May 2015.
+  * t/170_extensions.t: Catch warning with chkpass >= 9.5.
+  * debian/maintscripts-functions: Unset all locale-specific environment
+    variables when creating the initial database cluster. (Closes: #791526)
+  * Add /var/log/postgresql to /usr/lib/tmpfiles.d/postgresql.conf.
+  * Also set OOMScoreAdjust in postgresql@.service.
+  * pg_ctlcluster: OOM-protect 9.0 as well.
+  * pg_lsclusters: Color online/down clusters green/red.
+  * supported-versions: Accept DEB_PG_SUPPORTED_VERSIONS as well.
+  * Ship /etc/postgresql/ in postgresql-common. (Closes: #801140)
+
+  [ Martin Pitt ]
+  * pg_createcluster: Show the locale selected with --locale instead of the
+    current one. (LP: #1467061)
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Thu, 08 Oct 2015 13:48:26 +0200
+
+postgresql-common (169) unstable; urgency=medium
+
+  * t/022_recovery.t: New recovery tests to catch regression in 9.4.2 and
+    9.1.16.
+  * pg_upgradecluster: Set default dynamic_shared_memory_type = mmap.
+    (Closes: #784005)
+  * pg_upgradecluster: Complain if --link is used without --method=upgrade.
+  * pg_upgradecluster: Better error message when old and new version are
+    equal.
+
+ -- Christoph Berg <myon@debian.org>  Thu, 04 Jun 2015 12:09:53 +0200
+
+postgresql-common (168) unstable; urgency=medium
+
+  [ Martin Pitt ]
+  * Drop obsolete debian/backport-ppa script.
+  * debian/tests/default-psql: Skip test if default cluster creation is
+    disabled in createcluster.conf.
+
+  [ Christoph Berg ]
+  * t/170_extensions.t: Refactor dependency handling and add new extensions
+    shipped with 9.5.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Thu, 21 May 2015 11:28:45 +0200
+
+postgresql-common (167) unstable; urgency=medium
+
+  [ Christoph Berg ]
+  * pg_conftool: Fix 'remove' operation. Spotted by François Henry, merci!
+    (Closes: #778243)
+  * t/007_pg_conftool.t: Add pg_conftool tests.
+
+  [ Martin Pitt ]
+  * debian/maintscripts-functions: Avoid package installation failure of -9.1
+    due to the pg_basebackup.1 alternative on systems which have both -9.1 and
+    a later version installed in parallel. On those, pg_basebackup.1 will
+    already be in the psql.1.gz group, thus -9.1 must not try to put it back
+    into the postmaster.1.gz group. (LP: #1357682)
+  * Add "default-psql" autopkgtest: Smoketest to verify that installing the
+    "postgresql" metapackage results in a running and working cluster.
+  * debian/maintscripts-functions, configure_cluster(): When running under
+    systemd, do a daemon-reload to re-run the generator and thus create a unit
+    for the newly created cluster.
+  * Move package maintenance to git, update Vcs-* tags accordingly.
+  * Bump Standards-Version to 3.9.6 (no changes necessary).
+  * supported-versions: Add Ubuntu 15.10.
+
+ -- Martin Pitt <mpitt@debian.org>  Wed, 06 May 2015 11:28:26 +0200
+
+postgresql-common (166) unstable; urgency=medium
+
+  * postgresql-common: Breaks: systemd (<< 204). postgresql@.service uses
+    reload-related config options that are incompatible with the systemd
+    version in wheezy. (Consider upgrading to the wheezy-backports version.)
+  * pg_renamecluster: New tool to rename clusters.
+  * pg_upgradecluster: --rename allows renaming the upgraded cluster.
+  * pg_conftool: Allow to "edit" files.
+  * PgCommon.pm, pg_lsclusters: Fix thinko which broke logging to
+    /var/log/postgresql when log_destination was "syslog,stderr". The default
+    logfile is now always used even if logging_collector is enabled; it
+    receives the log messages produced before logging_collector is started.
+  * t/020_create_sql_remove.t: Versions >= 9.0 are OOM-protected.
+
+ -- Christoph Berg <myon@debian.org>  Thu, 05 Feb 2015 22:19:07 +0100
+
 postgresql-common (165) unstable; urgency=medium
 
   * Debconf translation updates, thanks!

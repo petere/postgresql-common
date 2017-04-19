@@ -1,5 +1,5 @@
 Name:           postgresql-common
-Version:        160
+Version:        177
 Release:        1%{?dist}
 BuildArch:      noarch
 Summary:        PostgreSQL database-cluster manager
@@ -8,6 +8,7 @@ Packager:       Debian PostgreSQL Maintainers <pkg-postgresql-public@lists.aliot
 License:        GPLv2+
 URL:            https://packages.debian.org/sid/%{name}
 Source0:        http://ftp.debian.org/debian/pool/main/p/%{name}/%{name}_%{version}.tar.xz
+Requires:       postgresql-client-common
 
 %description
 The postgresql-common package provides a structure under which
@@ -81,7 +82,7 @@ done < debian/postgresql-client-common.links
 sed -i -e 's/#redhat# //' \
     %{buildroot}/usr/bin/pg_config \
     %{buildroot}/usr/bin/pg_virtualenv \
-    %{buildroot}/usr/share/postgresql-common/PgCommon.pm \
+    %{buildroot}/usr/share/perl5/PgCommon.pm \
     %{buildroot}/usr/share/postgresql-common/init.d-functions
 # install init script
 mkdir -p %{buildroot}/etc/init.d %{buildroot}/etc/logrotate.d
@@ -92,12 +93,25 @@ cp rpm/init-functions-compat %{buildroot}/usr/share/postgresql-common
 sed -e 's/__SSL__/off/' createcluster.conf > %{buildroot}/etc/postgresql-common/createcluster.conf
 cp debian/logrotate.template %{buildroot}/etc/logrotate.d/postgresql-common
 
+%if 0%{?rhel} >= 7
+# Prepare systemd unit files, but only for RHEL/CentOS 7 and above...
+pushd systemd
+DESTDIR=%{buildroot} gmake install
+popd
+%endif
+
 %files -n postgresql-common -f files-postgresql-common
 %attr(0755, root, root) %config /etc/init.d/postgresql
 #%attr(0755, root, root) /usr/share/postgresql-common/postgresql-common.postinst
 /usr/share/postgresql-common/init-functions-compat
 %config /etc/postgresql-common/createcluster.conf
 %config /etc/logrotate.d/postgresql-common
+
+%if 0%{?rhel} >= 7
+%config /lib/systemd/system/postgresql.service
+%config /lib/systemd/system/postgresql@.service
+%config /lib/systemd/system-generators/postgresql-generator
+%endif
 
 %files -n postgresql-client-common -f files-postgresql-client-common
 
@@ -128,6 +142,10 @@ update-alternatives --install /usr/bin/ecpg pgsql-ecpg /usr/share/postgresql-com
 update-alternatives --remove pgsql-ecpg /usr/share/postgresql-common/pg_wrapper
 
 %changelog
+* Fri Dec 09 2016 Bernd Helmle <bernd.helmle@credativ.de> 177-1
+- New upstream release 177
+* Fri Jun 03 2016 Bernd Helmle <bernd.helmle@credativ.de> 174-2
+- Fix package dependencies and systemd integration
 * Thu Aug  7 2014 Christoph Berg <christoph.berg@credativ.de> 160-1
 - Omit the LD_PRELOAD logic in pg_wrapper
 * Thu Jun  5 2014 Christoph Berg <christoph.berg@credativ.de> 158-1

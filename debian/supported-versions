@@ -18,9 +18,11 @@
 # The *last* version returned here will be considered the default version, the
 # remaining lines list other supported versions in an undefined order.
 #
-# The environment variable PG_SUPPORTED_VERSIONS, and the files
-# ~/.pg_supported_versions and /etc/postgresql-common/supported_versions (in
-# that order) can be used to override the defaults. (Tokens separated by
+# * PG_SUPPORTED_VERSIONS
+# * DEB_PG_SUPPORTED_VERSIONS
+# * ~/.pg_supported_versions
+# * /etc/postgresql-common/supported_versions
+# (in that order) can be used to override the defaults. (Tokens separated by
 # newlines.)
 #
 # Recognized tokens:
@@ -34,8 +36,8 @@
 #            postgresql-server-dev-X.Y packages)
 # X.Y: consider this version supported
 #
-# (C) 2005-2014 Martin Pitt <mpitt@debian.org>
-# (C) 2012-2014 Christoph Berg <myon@debian.org>
+# (C) 2005-2016 Martin Pitt <mpitt@debian.org>
+# (C) 2012-2016 Christoph Berg <myon@debian.org>
 
 set -eu
 
@@ -47,7 +49,7 @@ else
     . /usr/share/postgresql-common/pgcommon.sh
 fi
 
-DEFAULT="9.4"
+DEFAULT="9.6"
 
 # functions
 
@@ -77,85 +79,48 @@ default() {
 
 ubuntu() {
     case "$1" in
-        8.04 | 8.10 | 9.04)
-            /bin/echo -e "8.3\n8.4"
-            ;;
-        9.10|10.04|10.10|11.04)
-            /bin/echo -e "8.4"
-            ;;
-        11.10|12.04|12.10|13.04|13.10)
-            /bin/echo -e "9.1"
-            ;;
-        14.04)
-            /bin/echo -e "9.3"
-            ;;
-        14.10|15.04)
-            /bin/echo -e "9.4"
-            ;;
+        12.04) /bin/echo -e "9.1" ;;
+        14.04) /bin/echo -e "9.3" ;;
+        16.04|16.10) /bin/echo -e "9.5" ;;
+        17.04) /bin/echo -e "9.6" ;;
         *)
             echo "supported-versions: WARNING: Unknown Ubuntu release: $1" >&2
-            /bin/echo -e "$DEFAULT"
-            ;;
+            /bin/echo -e "$DEFAULT" ;;
     esac
 }
 
 debian() {
     case "$1" in
-        5.0*) # Lenny
-            /bin/echo -e "8.3"
-            ;;
-        6.0*) # Squeeze
-            /bin/echo -e "8.4"
-            ;;
-        7|7.*) # Wheezy
-            /bin/echo -e "9.1"
-            ;;
-        8|8.*) # Jessie
-            /bin/echo -e "9.4"
-            ;;
+        5.0*)  /bin/echo -e "8.3" ;; # Lenny
+        6.0*)  /bin/echo -e "8.4" ;; # Squeeze
+        7|7.*) /bin/echo -e "9.1" ;; # Wheezy
+        8|8.*) /bin/echo -e "9.4" ;; # Jessie
+        9|9.*) /bin/echo -e "9.6" ;; # Stretch
         testing | unstable)
-            /bin/echo -e "9.4"
-            ;;
+            /bin/echo -e "$DEFAULT" ;;
         *)
             echo "supported-versions: WARNING: Unknown Debian release: $1" >&2
-            /bin/echo -e "$DEFAULT"
-            ;;
+            /bin/echo -e "$DEFAULT" ;;
     esac
 }
 
 debian_backports() {
     case "$1" in
-        5.0*) # Lenny
-            /bin/echo -e "8.3"
-            ;;
-        6.0*) # Squeeze
-            /bin/echo -e "8.4\n9.1"
-            ;;
-        7|7.*) # Wheezy
-            /bin/echo -e "9.1"
-            ;;
-        8|8.*) # Jessie
-            /bin/echo -e "9.4"
-            ;;
+        5.0*)  /bin/echo -e "8.3" ;; # Lenny
+        6.0*)  /bin/echo -e "8.4\n9.1" ;; # Squeeze
+        7|7.*) /bin/echo -e "9.1\n9.4" ;; # Wheezy
+        8|8.*) /bin/echo -e "9.4\n9.6" ;; # Jessie
+        9|9.*) /bin/echo -e "9.6" ;; # Stretch
         testing | unstable)
-            /bin/echo -e "9.4"
-            ;;
+            /bin/echo -e "$DEFAULT" ;;
         *)
             echo "supported-versions: WARNING: Unknown Debian release: $1" >&2
-            /bin/echo -e "$DEFAULT"
-            ;;
+            /bin/echo -e "$DEFAULT" ;;
     esac
 }
 
 pgdg() {
-    case $1 in
-        testing | unstable)
-            /bin/echo -e "8.4\n9.0\n9.1\n9.2\n9.3\n9.4" # 9.4 default
-            ;;
-        *)
-            /bin/echo -e "8.4\n9.0\n9.1\n9.2\n9.3\n9.4" # 9.4 default
-            ;;
-    esac
+    /bin/echo -e "9.1\n9.2\n9.3\n9.4\n9.5\n9.6"
 }
 
 installed() {
@@ -167,6 +132,8 @@ installed() {
 
 if [ "${PG_SUPPORTED_VERSIONS:-}" ] ; then
     SUPPORTED_VERSIONS=$(echo "$PG_SUPPORTED_VERSIONS" | xargs -n1)
+elif [ "${DEB_PG_SUPPORTED_VERSIONS:-}" ] ; then
+    SUPPORTED_VERSIONS=$(echo "$DEB_PG_SUPPORTED_VERSIONS" | xargs -n1)
 elif [ -f ${HOME:-}/.pg_supported_versions ] ; then
     SUPPORTED_VERSIONS="$(cat ${HOME:-}/.pg_supported_versions)"
 elif [ -f ${PGSYSCONFDIR:-/etc/postgresql-common}/supported_versions ] ; then

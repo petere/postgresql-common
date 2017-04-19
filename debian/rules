@@ -5,11 +5,14 @@ ifneq ($(findstring bpo,$(VERSION)),)
 	FLAVOR := debian-backports
 else ifneq ($(findstring pgdg,$(VERSION)),)
 	FLAVOR := pgdg
+	# for apt.postgresql.org builds, pull in the repository key package
+	PGDG_DEPENDS := pgdg-keyring
 else
 	FLAVOR := default
 endif
 SUPPORTED_VERSIONS := $(shell PG_SUPPORTED_VERSIONS="$(FLAVOR)" debian/supported-versions)
 DEFAULT_VER := $(lastword $(SUPPORTED_VERSIONS))
+LIBREADLINE := $(shell dpkg-query -W --showformat '$${Status} $${Package}\n' 'libreadline[0-9]'| sed -n '/ installed / {s/^.* //; p}'|sort -ru | head -n1)
 
 # use dh_systemd_* only on recent dists that have dh-systemd (>= 1.19)
 ifneq ($(wildcard /usr/bin/dh_systemd_start),)
@@ -27,9 +30,7 @@ override_dh_install:
 	dh_install
 	$(MAKE) -C systemd install DESTDIR=$(CURDIR)/debian/postgresql-common
 	install -m 644 -D debian/postgresql-common.sysctl debian/postgresql-common/etc/sysctl.d/30-postgresql-shm.conf
-ifneq ($(FLAVOR),default)
 	/bin/echo -e "# See /usr/share/postgresql-common/supported-versions for documentation of this file\n$(FLAVOR)" > debian/postgresql-client-common/etc/postgresql-common/supported_versions
-endif
 
 override_dh_installinit:
 	dh_installinit --name=postgresql -u'defaults 19 21' -r
@@ -39,12 +40,10 @@ override_dh_gencontrol:
 
 	# the versionless metapackages need to have version numbers which match
 	# the server version, not the p-common version
-	dh_gencontrol -ppostgresql -ppostgresql-client -ppostgresql-doc -ppostgresql-contrib  -- \
-		-Vdefault-version="$(DEFAULT_VER)" -v'$(DEFAULT_VER)+$${source:Version}'
+	dh_gencontrol -ppostgresql -ppostgresql-client -ppostgresql-doc -ppostgresql-contrib -ppostgresql-all -- \
+		-Vdefault-version="$(DEFAULT_VER)" -v'$(DEFAULT_VER)+$${source:Version}' \
+		-Vpostgresql-all-depends="$(foreach v,$(SUPPORTED_VERSIONS),postgresql-contrib-$v,postgresql-plperl-$v,postgresql-plpython-$v,postgresql-plpython3-$v,postgresql-pltcl-$v,)"
 
-ifeq ($(FLAVOR),pgdg)
-	# for apt.postgresql.org builds, pull in the repository key package
-	dh_gencontrol -ppostgresql-client-common -- -Vpgdg:Depends="pgdg-keyring"
-endif
+	dh_gencontrol -ppostgresql-client-common -- -Vpgdg:Depends="$(PGDG_DEPENDS)" -Vreadline:Recommends=$(LIBREADLINE)
 
 	dh_gencontrol --remaining-packages

@@ -2,35 +2,47 @@ Source: postgresql-common
 Section: database
 Priority: optional
 Maintainer: Debian PostgreSQL Maintainers <pkg-postgresql-public@lists.alioth.debian.org>
-Uploaders: Martin Pitt <mpitt@debian.org>, Christoph Berg <myon@debian.org>, Peter Eisentraut <petere@debian.org>
-Standards-Version: 3.9.5
-Vcs-Bzr: https://alioth.debian.org/scm/loggerhead/pkg-postgresql/postgresql-common/trunk
-Vcs-Browser: https://alioth.debian.org/scm/loggerhead/pkg-postgresql/postgresql-common/trunk/changes
-Build-Depends: debhelper (>= 9),
+Uploaders:
+ Martin Pitt <mpitt@debian.org>,
+ Christoph Berg <myon@debian.org>,
+ Peter Eisentraut <petere@debian.org>,
+Standards-Version: 3.9.8
+Vcs-Git: git://anonscm.debian.org/pkg-postgresql/postgresql-common.git
+Vcs-Browser: https://anonscm.debian.org/cgit/pkg-postgresql/postgresql-common.git
+Build-Depends:
+ debhelper (>= 9),
  dh-systemd (>= 1.19) | sysvinit (<< 2.88dsf-42),
- lsb-release
+ libreadline-dev,
+ lsb-release,
 
 Package: postgresql-common
 Architecture: all
 Multi-Arch: foreign
-Conflicts: postgresql-7.4, postgresql-8.0
-Depends: postgresql-client-common (>= ${source:Version}), 
- procps, 
+Conflicts:
+ postgresql-7.4,
+ postgresql-8.0,
+Depends:
  adduser,
  debconf (>= 0.5.00) | debconf-2.0,
  lsb-base (>= 3.0-3),
+ postgresql-client-common (= ${source:Version}),
+ procps,
  ssl-cert (>= 1.0.11),
  ucf,
- ${misc:Depends}
-Recommends: logrotate
-Breaks: postgresql-9.1 (<< 9.1.1-3~)
+ ${misc:Depends},
+Recommends:
+ logrotate,
+Breaks:
+ postgresql-9.1 (<< 9.1.1-3~),
+ systemd (<< 204),
 Description: PostgreSQL database-cluster manager
  The postgresql-common package provides a structure under which
  multiple versions of PostgreSQL may be installed and/or multiple
  clusters maintained at one time.
  .
- This package will automatically create a (self-signed) certificate so
- that SSL connections are supported.
+ The commands provided are pg_conftool, pg_createcluster, pg_ctlcluster,
+ pg_dropcluster, pg_lsclusters, pg_renamecluster, pg_upgradecluster,
+ pg_virtualenv.
  .
  PostgreSQL is a fully featured object-relational database management
  system. It supports a large part of the SQL standard and is designed
@@ -42,9 +54,13 @@ Description: PostgreSQL database-cluster manager
 Package: postgresql-client-common
 Architecture: all
 Multi-Arch: foreign
-Depends: ${misc:Depends}, ${pgdg:Depends},
- netbase
-Recommends: lsb-release, libreadline6
+Depends:
+ netbase,
+ ${misc:Depends},
+ ${pgdg:Depends},
+Recommends:
+ lsb-release,
+ ${readline:Recommends},
 Description: manager for multiple PostgreSQL client versions
  The postgresql-client-common package provides a structure under which
  multiple versions of PostgreSQL client programs may be installed at
@@ -62,13 +78,14 @@ Description: manager for multiple PostgreSQL client versions
 
 Package: postgresql-server-dev-all
 Architecture: all
-Depends: ${misc:Depends},
- postgresql-common (>= 117~),
+Depends:
+ dctrl-tools,
  iproute2 | net-tools,
  lsb-release,
- dctrl-tools,
  make,
- ${server-dev-all-depends}
+ postgresql-common (>= 117~),
+ ${misc:Depends},
+ ${server-dev-all-depends},
 Description: extension build tool for multiple PostgreSQL versions
  The postgresql-server-dev-all package provides the pg_buildext script for
  simplifying packaging of a PostgreSQL extension supporting multiple major
@@ -83,8 +100,11 @@ Description: extension build tool for multiple PostgreSQL versions
 
 Package: postgresql
 Architecture: all
-Depends: postgresql-${default-version}, ${misc:Depends}
-Suggests: postgresql-doc
+Depends:
+ postgresql-${default-version},
+ ${misc:Depends},
+Suggests:
+ postgresql-doc,
 Description: object-relational SQL database (supported version)
  This metapackage always depends on the currently supported PostgreSQL
  database server version.
@@ -100,7 +120,9 @@ Description: object-relational SQL database (supported version)
 Package: postgresql-client
 Architecture: all
 Multi-Arch: foreign
-Depends: postgresql-client-${default-version}, ${misc:Depends}
+Depends:
+ postgresql-client-${default-version},
+ ${misc:Depends},
 Description: front-end programs for PostgreSQL (supported version)
  This metapackage always depends on the currently supported database
  client package for PostgreSQL.
@@ -117,7 +139,9 @@ Package: postgresql-doc
 Architecture: all
 Multi-Arch: foreign
 Section: doc
-Depends: postgresql-doc-${default-version}, ${misc:Depends}
+Depends:
+ postgresql-doc-${default-version},
+ ${misc:Depends},
 Description: documentation for the PostgreSQL database management system
  This metapackage always depends on the currently supported PostgreSQL
  database documentation package.
@@ -132,10 +156,34 @@ Description: documentation for the PostgreSQL database management system
 
 Package: postgresql-contrib
 Architecture: all
-Depends: postgresql-contrib-${default-version}, ${misc:Depends}
+Depends:
+ postgresql-contrib-${default-version},
+ ${misc:Depends},
 Description: additional facilities for PostgreSQL (supported version)
  This metapackage always depends on the currently supported PostgreSQL
  database contrib package.
+ .
+ PostgreSQL is a fully featured object-relational database management
+ system.  It supports a large part of the SQL standard and is designed
+ to be extensible by users in many aspects.  Some of the features are:
+ ACID transactions, foreign keys, views, sequences, subqueries,
+ triggers, user-defined types and functions, outer joins, multiversion
+ concurrency control.  Graphical user interfaces and bindings for many
+ programming languages are available as well.
+
+Package: postgresql-all
+Architecture: all
+Depends:
+ libecpg-dev,
+ libpq-dev,
+ postgresql-server-dev-all,
+ ${postgresql-all-depends},
+ ${misc:Depends},
+Description: metapackage depending on all PostgreSQL server packages
+ This metapackage depends on all PostgreSQL server packages, in all
+ supported versions (excluding documentation and debug symbols). It
+ exists to facilitate depending on the server packages in test
+ environments.
  .
  PostgreSQL is a fully featured object-relational database management
  system.  It supports a large part of the SQL standard and is designed

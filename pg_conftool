@@ -2,7 +2,7 @@
 # Read and edit PostgreSQL config files
 # vim:sw=4:et:
 #
-# (C) 2014 Christoph Berg <myon@debian.org>
+# (C) 2014-2016 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@ use warnings;
 use Getopt::Long;
 use PgCommon qw(quote_conf_value user_cluster_map read_cluster_conf_file
     read_conf_file set_conffile_value set_conf_value disable_conffile_value
-    disable_conf_value);
+    disable_conf_value cluster_exists error);
 
 ## option parsing
 
@@ -55,7 +55,7 @@ help(1) unless GetOptions (
 # find command in argument array
 my $cmdidx;
 for (my $i = 0; $i < @ARGV; $i++) {
-    if ($ARGV[$i] =~ /^(show|get|set|remove|delete|disable)$/) {
+    if ($ARGV[$i] =~ /^(show|get|set|remove|delete|disable|edit)$/) {
         $cmdidx = $i;
         last;
     }
@@ -76,12 +76,19 @@ if ($cmdidx == 0) {
 } else {
     help(1, 'Too many arguments before command');
 }
+
+error "Cluster $version $cluster does not exist"
+    unless (cluster_exists $version, $cluster);
+
 splice @ARGV, 0, $cmdidx; # remove everything before the command
 $ARGV[0] = 'show' if ($ARGV[0] eq 'get'); # accept alternative variants of some commands
 $ARGV[0] = 'remove' if ($ARGV[0] =~ /delete|disable/);
 
 my ($cmd, $key, $value);
-if ($ARGV[0] =~ /^(show|disable)$/) {
+if ($ARGV[0] =~ /^(edit)$/) {
+    help(1, "$ARGV[0] takes no argument") unless (@ARGV == 1);
+    ($cmd) = @ARGV;
+} elsif ($ARGV[0] =~ /^(show|remove)$/) {
     help(1, "$ARGV[0] needs exactly one argument") unless (@ARGV == 2);
     ($cmd, $key) = @ARGV;
 } else {
@@ -99,13 +106,14 @@ if ($cmd eq 'show') {
     } else {
         %conf = read_cluster_conf_file ($version, $cluster, $conffile);
     }
+
     if ($key eq 'all') {
         foreach my $k (sort keys %conf) {
             printf "%s = %s\n", $k, quote_conf_value($conf{$k});
         }
     } elsif (exists $conf{$key}) {
         if ($short) {
-            printf "%s\n", quote_conf_value($conf{$key});
+            printf "%s\n", $conf{$key};
         } else {
             printf "%s = %s\n", $key, quote_conf_value($conf{$key});
         }
@@ -126,6 +134,17 @@ if ($cmd eq 'show') {
         disable_conffile_value ($conffile, $key);
     } else {
         disable_conf_value ($version, $cluster, $conffile, $key);
+    }
+
+} elsif ($cmd eq 'edit') {
+    my $editor = 'vi';
+    if ($ENV{EDITOR}) {
+        ($editor) = $ENV{EDITOR} =~ /(.*)/; # untaint
+    }
+    if ($conffile =~ m!/!) {
+        system $editor, $conffile;
+    } else {
+        system $editor, "$PgCommon::confroot/$version/$cluster/$conffile";
     }
 }
 
@@ -182,6 +201,10 @@ Set or update a parameter.
 =item B<remove> I<parameter>
 
 Remove (comment out) a parameter from a config file.
+
+=item B<edit>
+
+Open the config file in an editor.  Unless B<$EDITOR> is set, B<vi> is used.
 
 =back
 

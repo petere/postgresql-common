@@ -38,6 +38,11 @@ Many extensions support B<make installcheck> testing using B<pg_regress>. As
 this needs the package to be installed, it cannot be run at build time.
 Instead, the tests should be run using B<autopkgtest> from C<debian/tests/*>.
 
+If C<debian/tests/control.in> exists, occurrences of package names containing
+B<PGVERSION> are replaced by lists of package names with the target PostgreSQL
+versions filled in. (If no replacing is needed in C<debian/tests/control>, it
+is fine to provide the tests control file directly.)
+
 =head1 OPTIONS
 
 =over 4
@@ -74,7 +79,8 @@ B<updatecontrol> needs to be run manually.
 
 =item B<updatecontrol>
 
-Update C<debian/control> from C<debian/control.in>.
+Update C<debian/control> from C<debian/control.in>, and C<debian/tests/control>
+from C<debian/tests/control.in> if the latter exists.
 
 =item B<configure> I<build-dir> [I<extra-configure-options>]
 
@@ -166,6 +172,8 @@ configure the list of supported versions on your system.
 
 =item B<debian/rules:>
 
+  #!/usr/bin/make -f
+
   include /usr/share/postgresql-common/pgxs_debian_control.mk
 
   # omit this if the package does not use autoconf
@@ -196,6 +204,12 @@ configure the list of supported versions on your system.
   Tests: installcheck
   Restrictions: allow-stderr
 
+=item B<debian/tests/control.in:> (optional)
+
+  Depends: @, postgresql-contrib-PGVERSION, postgresql-PGVERSION-bar
+  Tests: installcheck
+  Restrictions: allow-stderr
+
 =item B<debian/tests/installcheck:>
 
   #!/bin/sh
@@ -212,6 +226,12 @@ configure the list of supported versions on your system.
 
 =back
 
+=head1 ENVIRONMENT
+
+B<pg_buildext> sets B<PG_VIRTUALENV_UNSHARE=-n> for the installcheck actions by
+default to request a new network namespace, enabling several instances running
+in parallel to share port 5432. Override by setting to a different value.
+
 =head1 COMPATIBILITY
 
 Earlier B<pg_buildext> versions required a "source dir" argument after the
@@ -224,6 +244,11 @@ postgresql-server-dev-all (>= 148~).
 
 B<pg_buildext installcheck> was introduced in postgresql-server-dev-all (>=
 153~).
+
+B<PG_VIRTUALENV_UNSHARE=-n> was introduced in postgresql-common (>= 170~).
+
+Handling of C<debian/tests/control.in> with B<PGVERSION> replacement was
+introduced in postgresql-common (>= 171~).
 
 =head1 SEE ALSO
 

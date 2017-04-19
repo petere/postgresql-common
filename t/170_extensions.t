@@ -7,12 +7,12 @@ use TestLib;
 use PgCommon;
 use Test::More 0.87; # needs libtest-simple-perl backport on lenny
 
-my $v = $MAJORS[-1];
+foreach my $v (@MAJORS) {
+note "Running tests for $v";
 
 if ($v < '9.1') {
     pass 'No extensions for version < 9.1';
-    done_testing(1);
-    exit 0;
+    next;
 }
 
 # create cluster
@@ -22,23 +22,36 @@ is ((system "pg_createcluster $v main --start >/dev/null"), 0, "pg_createcluster
 is_program_out 'postgres', "psql -qc 'DROP EXTENSION plpgsql'", 0, '';
 is_program_out 'postgres', "psql -Atc 'SELECT * FROM pg_extension'", 0, '';
 
+my %depends = (
+    earthdistance     => [qw(cube)],
+    hstore_plperl     => [qw(hstore plperl)],
+    hstore_plperlu    => [qw(hstore plperlu)],
+    hstore_plpython2u => [qw(hstore plpython2u)],
+    hstore_plpython3u => [qw(hstore plpython3u)],
+    hstore_plpythonu  => [qw(hstore plpythonu)],
+    ltree_plpython2u  => [qw(ltree plpython2u)],
+    ltree_plpython3u  => [qw(ltree plpython3u)],
+    ltree_plpythonu   => [qw(ltree plpythonu)],
+);
+
 foreach (</usr/share/postgresql/$v/extension/*.control>) {
     my ($extname) = $_ =~ /^.*\/(.*)\.control$/;
 
     my $expected_extensions = "$extname\n";
 
-    if ($extname eq 'earthdistance') {
-	# depends on cube
-	is_program_out 'postgres', "psql -qc 'CREATE EXTENSION cube'", 0, '',
-	    "dependency cube installs without error";
-	$expected_extensions = "cube\n" . $expected_extensions;
+    if ($depends{$extname}) {
+        for my $dep (@{$depends{$extname}}) {
+            is_program_out 'postgres', "psql -qc 'CREATE EXTENSION $dep'", 0, '',
+                "$extname dependency $dep installs without error";
+        }
+        $expected_extensions = join ("\n", sort ($extname, @{$depends{$extname}})) . "\n";
     }
 
     if ($extname eq 'hstore' && $v eq '9.1') {
 	# EXFAIL: hstore in 9.1 throws a warning about obsolete => operator
 	like_program_out 'postgres', "psql -qc 'CREATE EXTENSION \"$extname\"'", 0,
 	   qr/=>/, "extension $extname installs (with warning)";
-    } elsif ($extname eq 'chkpass' && $v eq '9.5') {
+    } elsif ($extname eq 'chkpass' && $v >= '9.5') {
         # chkpass is slightly broken, see
         # http://www.postgresql.org/message-id/20141117162116.GA3565@msg.df7cb.de
         like_program_out 'postgres', "psql -qc 'CREATE EXTENSION \"$extname\"'", 0,
@@ -49,19 +62,23 @@ foreach (</usr/share/postgresql/$v/extension/*.control>) {
 	    "extension $extname installs without error";
     }
 
-    is_program_out 'postgres', "psql -Atc 'SELECT extname FROM pg_extension'", 0, 
+    is_program_out 'postgres', "psql -Atc 'SELECT extname FROM pg_extension ORDER BY extname'", 0,
 	$expected_extensions, "$extname is in pg_extension";
     is_program_out 'postgres', "psql -qc 'DROP EXTENSION \"$extname\"'", 0, '',
 	"extension $extname removes without error";
-    if ($extname eq 'earthdistance') {
-	is_program_out 'postgres', "psql -qc 'DROP EXTENSION cube'", 0, '',
-	    "dependency extension cube removes without error";
+
+    if ($depends{$extname}) {
+        for my $dep (@{$depends{$extname}}) {
+            is_program_out 'postgres', "psql -qc 'DROP EXTENSION $dep'", 0, '',
+                "$extname dependency extension $dep removes without error";
+        }
     }
 }
 
 # clean up
 is ((system "pg_dropcluster $v main --stop"), 0, "pg_dropcluster $v main");
 check_clean;
+}
 
 done_testing();
 
