@@ -15,18 +15,18 @@ if ($PgCommon::rpm) {
 }
 
 # test pg_updatedicts
-unlink '/var/cache/postgresql/dicts/en_us.affix';
-unlink '/var/cache/postgresql/dicts/en_us.dict';
-unlink "/usr/share/postgresql/$version/tsearch_data/en_us.affix";
-unlink "/usr/share/postgresql/$version/tsearch_data/en_us.dict";
+unlink '/Library/Caches/postgresql/dicts/en_us.affix';
+unlink '/Library/Caches/postgresql/dicts/en_us.dict';
+unlink "/usr/local/opt/postgresql@$version/share/tsearch_data/en_us.affix";
+unlink "/usr/local/opt/postgresql@$version/share/tsearch_data/en_us.dict";
 is ((exec_as 0, 'pg_updatedicts'), 0, 'pg_updatedicts succeeded');
-ok -f '/var/cache/postgresql/dicts/en_us.affix',
+ok -f '/Library/Caches/postgresql/dicts/en_us.affix',
     'pg_updatedicts created en_us.affix';
-ok -f '/var/cache/postgresql/dicts/en_us.dict',
+ok -f '/Library/Caches/postgresql/dicts/en_us.dict',
     'pg_updatedicts created en_us.dict';
-ok -l "/usr/share/postgresql/$version/tsearch_data/en_us.affix",
+ok -l "/usr/local/opt/postgresql@$version/share/tsearch_data/en_us.affix",
     "pg_updatedicts created $version en_us.affix symlink";
-ok -l "/usr/share/postgresql/$version/tsearch_data/en_us.dict",
+ok -l "/usr/local/opt/postgresql@$version/share/tsearch_data/en_us.dict",
     "pg_updatedicts created $version en_us.dict symlink";
 
 # create cluster

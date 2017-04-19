@@ -15,6 +15,7 @@
 
 package PgCommon;
 use strict;
+use File::Basename;
 use IPC::Open3;
 use Socket;
 use POSIX;
@@ -52,6 +53,7 @@ if ($ENV{'PGSYSCONFDIR'}) {
 my $mapfile = "$common_confdir/user_clusters";
 our $binroot = "/usr/lib/postgresql/";
 #redhat# $binroot = "/usr/pgsql-";
+$binroot = "/usr/local/opt/postgresql@";
 our $rpm = 0;
 #redhat# $rpm = 1;
 my $defaultport = 5432;
@@ -382,7 +384,7 @@ sub get_cluster_socketdir {
     $socketdir =~ s/\s*,.*// if ($socketdir); # ignore additional directories for now
     return $socketdir if $socketdir;
 
-    #redhat# return '/tmp'; # RedHat PGDG packages default to /tmp
+    return '/tmp'; # RedHat PGDG packages default to /tmp
     # try to determine whether this is a postgres owned cluster and we default
     # to /var/run/postgresql
     $socketdir = '/var/run/postgresql';
@@ -563,11 +565,12 @@ sub check_pidfile_running {
     my $pid = read_pidfile $_[0];
     if (defined $pid) {
 	prepare_exec;
-	my $res = open PS, '-|', '/bin/ps', '-o', 'comm', 'h', 'p', $pid;
+	my $res = open PS, '-|', '/bin/ps', '-o', 'comm=', '-p', $pid;
 	restore_exec;
 	if ($res) {
 	    my $process = <PS>;
 	    chomp $process if defined $process;
+	    $process = basename($process) if defined $process;
 	    close PS;
 	    if (defined $process and ($process eq 'postmaster' or $process eq 'postgres')) {
                 return 1;
@@ -646,12 +649,14 @@ sub get_versions {
     my @versions = ();
     my $dir = $binroot;
     #redhat# $dir = '/usr';
+    $dir = '/usr/local/opt';
     if (opendir (D, $dir)) {
 	my $entry;
         while (defined ($entry = readdir D)) {
             next if $entry eq '.' || $entry eq '..';
             my $pfx = '';
             #redhat# $pfx = "pgsql-";
+            $pfx = "postgresql@";
             ($entry) = $entry =~ /^$pfx(\d+\.\d+)$/; # untaint
             push @versions, $entry if get_program_path ('psql', $entry);
         }

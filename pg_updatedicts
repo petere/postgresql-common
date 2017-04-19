@@ -15,9 +15,8 @@
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 
-my @srcdirs = ('/usr/share/hunspell', '/usr/share/myspell/dicts');
-my $cachedir = '/var/cache/postgresql/dicts';
-my $pgsharedir = '/usr/share/postgresql/';
+my @srcdirs = ('~/Library/Spelling', '/Library/Spelling');
+my $cachedir = '/Library/Caches/postgresql/dicts';
 
 use PgCommon;
 
@@ -62,14 +61,12 @@ for my $d (@srcdirs) {
 
 	# convert to UTF-8 and write to cache dir
 	print "  $locale\n";
-	if ((system 'iconv', '-f', $enc, '-t', 'UTF-8', '-o',
-	    "$cachedir/$locale.affix", $aff) != 0) {
+	if ((system "iconv -f $enc -t UTF-8 $aff >$cachedir/$locale.affix") != 0) {
 	    unlink "$cachedir/$locale.affix";
 	    print STDERR "ERROR: Conversion of $aff failed\n";
 	    next;
 	}
-	if ((system 'iconv', '-f', $enc, '-t', 'UTF-8', '-o',
-	    "$cachedir/$locale.dict", $dic) != 0) {
+	if ((system "iconv -f $enc -t UTF-8 $dic >$cachedir/$locale.dict") != 0) {
 	    unlink "$cachedir/$locale.affix";
 	    unlink "$cachedir/$locale.dict";
 	    print STDERR "ERROR: Conversion of $dic failed\n";
@@ -80,7 +77,7 @@ for my $d (@srcdirs) {
 	# install symlinks to all versions >= 8.3
 	foreach my $v (get_versions) {
 	    next if $v lt '8.3';
-	    my $dest = "$pgsharedir/$v/tsearch_data";
+	    my $dest = "/usr/local/opt/postgresql@$v/share/tsearch_data";
 	    next if ! -d $dest;
             $current{"$dest/$locale.affix"} = undef;
             $current{"$dest/$locale.dict"} = undef;
@@ -101,8 +98,8 @@ foreach my $f (glob "$cachedir/*") {
     print "  $f\n";
     unlink $f;
 }
-foreach my $f ((glob "$pgsharedir/*/tsearch_data/*.affix"),
-               (glob "$pgsharedir/*/tsearch_data/*.dict")) {
+foreach my $f ((glob "/usr/local/opt/postgresql@*/share/tsearch_data/*.affix"),
+               (glob "/usr/local/opt/postgresql@*/share/tsearch_data/*.dict")) {
     next unless -l $f;
     next if exists $current{$f};
     print "  $f\n";
@@ -124,12 +121,12 @@ B<pg_updatedicts>
 B<pg_updatedicts> makes dictionaries and affix files from installed myspell
 and hunspell dictionary packages available to PostgreSQL for usage with tsearch
 and word stem support. In particular, it takes all I<*.dic> and I<*.aff> files
-from /usr/share/myspell/dicts/, converts them to UTF-8, puts them into
-/var/cache/postgresql/dicts/ with I<*.dict> and I<*.affix> suffixes, and
-symlinks them into /usr/share/postgresql/I<version>/tsearch_data/, where
+from ~/Library/Spelling/ and /Library/Spelling/, converts them to UTF-8, puts them into
+/Library/Caches/postgresql/dicts/ with I<*.dict> and I<*.affix> suffixes, and
+symlinks them into /usr/local/opt/postgresql@I<version>/share/tsearch_data/, where
 PostgreSQL looks for them.
 
-Through postgresql-common's dpkg trigger, this program is automatically run
+This program should be run
 whenever a myspell or hunspell dictionary package is installed or upgraded.
 
 =head1 AUTHOR
