@@ -33,11 +33,11 @@
 # ubuntu [release]: use Ubuntu defaults
 # pgdg [release]: use defaults for apt.postgresql.org
 # installed: consider all installed versions supported (determined by
-#            postgresql-server-dev-X.Y packages)
-# X.Y: consider this version supported
+#            postgresql-server-dev-X packages)
+# X: consider this version supported
 #
 # (C) 2005-2016 Martin Pitt <mpitt@debian.org>
-# (C) 2012-2016 Christoph Berg <myon@debian.org>
+# (C) 2012-2017 Christoph Berg <myon@debian.org>
 
 set -eu
 
@@ -49,7 +49,7 @@ else
     . /usr/share/postgresql-common/pgcommon.sh
 fi
 
-DEFAULT="9.6"
+DEFAULT="10"
 
 # functions
 
@@ -82,7 +82,7 @@ ubuntu() {
         12.04) /bin/echo -e "9.1" ;;
         14.04) /bin/echo -e "9.3" ;;
         16.04|16.10) /bin/echo -e "9.5" ;;
-        17.04) /bin/echo -e "9.6" ;;
+        17.04|17.10) /bin/echo -e "9.6" ;;
         *)
             echo "supported-versions: WARNING: Unknown Ubuntu release: $1" >&2
             /bin/echo -e "$DEFAULT" ;;
@@ -96,6 +96,7 @@ debian() {
         7|7.*) /bin/echo -e "9.1" ;; # Wheezy
         8|8.*) /bin/echo -e "9.4" ;; # Jessie
         9|9.*) /bin/echo -e "9.6" ;; # Stretch
+        10|10.*) /bin/echo -e "10" ;; # Buster
         testing | unstable)
             /bin/echo -e "$DEFAULT" ;;
         *)
@@ -111,6 +112,7 @@ debian_backports() {
         7|7.*) /bin/echo -e "9.1\n9.4" ;; # Wheezy
         8|8.*) /bin/echo -e "9.4\n9.6" ;; # Jessie
         9|9.*) /bin/echo -e "9.6" ;; # Stretch
+        10|10.*) /bin/echo -e "10" ;; # Buster
         testing | unstable)
             /bin/echo -e "$DEFAULT" ;;
         *)
@@ -120,12 +122,13 @@ debian_backports() {
 }
 
 pgdg() {
-    /bin/echo -e "9.1\n9.2\n9.3\n9.4\n9.5\n9.6"
+    /bin/echo -e "9.2\n9.3\n9.4\n9.5\n9.6\n10"
 }
 
 installed() {
-    dpkg -l 'postgresql-server-dev-[1-9].*' | \
-        sed -ne 's/^ii *postgresql-server-dev-\([^ ]*\).*/\1/p'
+    dpkg -l 'postgresql-server-dev-[1-9]*' | \
+        sed -ne 's/^ii *postgresql-server-dev-\([^ ]*\).*/\1/p' | \
+        sort -V
 }
 
 # main

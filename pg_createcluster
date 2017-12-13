@@ -18,13 +18,15 @@
 
 use PgCommon;
 use Getopt::Long;
-use POSIX qw/setlocale LC_ALL LC_CTYPE/;
+use POSIX qw/lchown setlocale LC_ALL LC_CTYPE/;
 
 $ENV{'PATH'} = '/bin:/usr/bin'; # untaint
 
 my @postgres_user = getpwuid $<;
 my %defaultconf;
 my $explicit_auth_config = 0;
+
+chdir '/';
 
 # replace placeholders
 # Arguments: <string> <version> <cluster>
@@ -65,8 +67,9 @@ sub init_db {
 	push @initdb, split (/\s+/, replace_v_c ($options, $version, $cluster));
     }
     push @initdb, ('-D', $datadir);
-    if (my $xlogdir = $defaultconf{'xlogdir'}) {
-	push @initdb, ('--xlogdir', replace_v_c ($xlogdir, $version, $cluster));
+    if (my $waldir = $defaultconf{'waldir'} || $defaultconf{'xlogdir'}) {
+        my $wal = $version >= 10 ? 'wal' : 'xlog'; # renamed in PG 10
+	push @initdb, ("--${wal}dir", replace_v_c ($waldir, $version, $cluster));
     }
     if ($explicit_auth_config) {
 	# do nothing
@@ -86,19 +89,12 @@ sub init_db {
     push @initdb, ('--lc-time', $lc_time) if $lc_time;
     push @initdb, @$initdb_opts_from_cli;
 
-    # pre-8.2 servers do not ignore LANG when LC_ALL is set; work around this
-    # bug
-    if ($version <= '8.2' && $ENV{'LC_ALL'}) {
-        $ENV{'LANG'} = $ENV{'LC_ALL'};
-    }
-
     if (fork) {
         wait;
         error 'initdb failed' if $?;
     } else{
-        close STDOUT;
         change_ugid $owneruid, $ownergid;
-        open STDOUT, ">/dev/null";
+        print "@initdb\n";
         exec @initdb;
     }
 }
@@ -123,21 +119,6 @@ sub move_conffile {
         error "move_conffile: required configuration file $realfile does not exist";
     }
 }
-
-#
-# Version specific default configuration
-#
-
-sub configure_8_1 {
-    PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', 'stats_row_level', 'on';
-    PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', 'autovacuum', 'on';
-}
-
-sub configure_8_2 {
-    PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', 'stats_row_level', 'on';
-    PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', 'autovacuum', 'on';
-}
-# >= 8.3 enables autovacuum by default
 
 # Set up the default pg_hba.conf file:
 # - Add a "local all" entry to pg_hba.conf for the db superuser before all
@@ -313,7 +294,9 @@ if (!defined $datadir) {
     # ensure that the version data dir is owned by postgres as well, so that
     # it can be administrated without root permissions
     if (!stat $pd) {
-        system 'install', '-d', '-o', $postgres_user[2], '-g', $postgres_user[3], $pd;
+        my @install = qw(install -d);
+        push @install, '-o', $postgres_user[2], '-g', $postgres_user[3] if ($> == 0);
+        system @install, $pd;
         $datadirp_created = $pd; # clean up in case of error
     }
 }
@@ -341,7 +324,9 @@ if (defined $port) {
 
 # create configuration directory
 if (!stat $confdirp) {
-    system 'install', '-d', '-o', $postgres_user[2], '-g', $postgres_user[3], $confdirp;
+    my @install = qw(install -d);
+    push @install, '-o', $postgres_user[2], '-g', $postgres_user[3] if ($> == 0);
+    system @install, $confdirp;
 }
 # now we created the first new directory for this cluster and start to rollback
 # on error
@@ -368,11 +353,7 @@ if (-f "$datadir/PG_VERSION") {
         error "$datadir already contains a version $existingver cluster";
     }
 } else {
-    my $loc = $locale || setlocale (LC_CTYPE);
-    print "Creating new cluster $version/$cluster ...\n";
-    print "  config $confdir\n";
-    print "  data   $datadir\n";
-    print "  locale $loc\n";
+    print "Creating new PostgreSQL cluster $version/$cluster ...\n";
     init_db $version, $datadir, $owneruid, $ownergid, \@initdb_opts_from_cli;
     $newcluster = 1;
 }
@@ -387,8 +368,9 @@ set_cluster_pg_ctl_conf $version, $cluster, '';
 move_conffile "$datadir/postgresql.conf", $confdir, $owneruid, $ownergid, '644';
 move_conffile "$datadir/pg_hba.conf", $confdir, $owneruid, $ownergid, '640', 'hba_file';
 move_conffile "$datadir/pg_ident.conf", $confdir, $owneruid, $ownergid, '640', 'ident_file';
-chown $owneruid, $ownergid, $datadir, $confdir, "$confdir/start.conf" or die "chown: $!";
-chown $owneruid, $ownergid, $datadir, $confdir, "$confdir/pg_ctl.conf" or die "chown: $!";
+foreach my $f ($datadir, $confdir, "$confdir/start.conf", "$confdir/pg_ctl.conf") {
+    lchown $owneruid, $ownergid, $f or error "lchown $f: $!";
+}
 
 PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', 'data_directory', $datadir;
 
@@ -417,12 +399,10 @@ unless ($socketdir) {
         $socketdir='/tmp';
     }
 }
-print "  socket $socketdir\n";
 set_cluster_socketdir $version, $cluster, $socketdir;
 $> = $orig_euid;
 $) = $orig_egid;
 
-print "  port   $port\n";
 set_cluster_port $version, $cluster, $port;
 
 # create log file
@@ -430,7 +410,7 @@ if (! -d '/var/log/postgresql') {
     mkdir '/var/log/postgresql' or
 	error "could not create log directory; you might need to run this program with root privileges";
     chmod 01775, '/var/log/postgresql';
-    chown 0, $postgres_user[3], '/var/log/postgresql';
+    lchown 0, $postgres_user[3], '/var/log/postgresql';
 }
 $real_logfile = $custom_logfile || "/var/log/postgresql/postgresql-$version-$cluster.log";
 error "logfile $real_logfile is a directory, not a file" if (-d $real_logfile);
@@ -445,20 +425,15 @@ if ($owneruid < 500) {
 } else {
     $g = $ownergid;
 }
-chown $owneruid, $g, $real_logfile;
+lchown $owneruid, $g, $real_logfile;
 # if we are using a non-default log file, create a log symlink
 if ($custom_logfile) {
     symlink $real_logfile, "$confdir/log";
-    chown $owneruid, $ownergid, "$confdir/log";
+    lchown $owneruid, $ownergid, "$confdir/log";
 }
 
-# version specific default configuration tweaking
-$conf_fn = "configure_$version";
-$conf_fn =~tr/./_/;
-&$conf_fn if defined &$conf_fn and $newcluster;
-
 # SSL configuration
-my $want_ssl = PgCommon::config_bool($defaultconf{ssl} || 'true');
+my $want_ssl = PgCommon::config_bool($defaultconf{ssl} || 'on');
 
 # Check whether we can access the SSL private key as the cluster owner
 my $ssl_key_file = '/etc/ssl/private/ssl-cert-snakeoil.key';
@@ -515,7 +490,7 @@ if ($want_ssl && $newcluster && -e $ssl_cert_file && $ssl_key_access) {
         symlink $ssl_key_file, "$datadir/server.key";
     }
 
-    PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', 'ssl', 'true';
+    PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', 'ssl', 'on';
 }
 
 # SSL client certificate CA
@@ -564,7 +539,7 @@ open ENV, ">$confdir/environment" or error "could not create environment file $c
 print ENV $defaultenv;
 close ENV;
 chmod 0644, "$confdir/environment";
-chown $owneruid, $ownergid, "$confdir/environment";
+lchown $owneruid, $ownergid, "$confdir/environment";
 
 $cleanup_cruft = 0;
 
@@ -575,7 +550,7 @@ if ($socketdir eq '/var/run/postgresql') {
 
 # handle other createcluster.conf parameters
 foreach my $guc (sort keys %defaultconf) {
-    next if $guc =~ /^(create_main_cluster|start_conf|data_directory|xlogdir|initdb_options|ssl)$/;
+    next if $guc =~ /^(create_main_cluster|start_conf|data_directory|waldir|xlogdir|initdb_options|ssl)$/;
     next if $guc eq 'logging_collector' and $version < 8.3;
     next if $guc eq 'cluster_name' and $version < 9.5;
     my $val = replace_v_c ($defaultconf{$guc}, $version, $cluster);
@@ -584,7 +559,7 @@ foreach my $guc (sort keys %defaultconf) {
         next if ($version < 9.3);
         if ($val =~ /^[\w.]+$/ and not -e "$confdir/$val") { # create directory relative to new config directory
             mkdir "$confdir/$val", 0755;
-            chown $owneruid, $ownergid, "$confdir/$val";
+            lchown $owneruid, $ownergid, "$confdir/$val";
         }
     }
     PgCommon::set_conf_value $version, $cluster, 'postgresql.conf', $guc, $val;
@@ -608,7 +583,11 @@ if (not exists $ENV{'PG_CLUSTER_CONF_ROOT'} and $startconf eq 'auto' and -d '/ru
 # start it if requested
 if ($start) {
     system 'pg_ctlcluster', $version, $cluster, 'start';
+    die "Could not start cluster\n" if ($?);
 }
+
+# finally, show the cluster we created
+system 'pg_lsclusters', $version, $cluster;
 
 END {
     # clean up cruft if something went wrong
@@ -872,11 +851,13 @@ Default C<start.conf> value to use.
 
 Default data directory.
 
-=item B<xlogdir> (Default: unset)
+=item B<waldir|xlogdir> (Default: unset)
 
 Default directory for transaction logs. When used, B<initdb> will create a
-symlink from C<pg_xlog> in the data directory to this location. Unset by
-default, i.e. pg_xlog is remains in the data directory.
+symlink from C<pg_wal> (PostgreSQL 9.6 and earlier: C<pg_xlog>) in the data
+directory to this location. Unset by default, i.e. transaction logs remain in
+the data directory. Both spellings of this option are accepted, and translated
+to the correct initdb invocation depending on the cluster version.
 
 =item B<initdb_options> (Default: unset)
 

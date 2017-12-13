@@ -129,8 +129,6 @@ sub read_conf_file {
         return "$parent_path/$path";
     }
 
-    return %conf unless (-e $config_path);
-
     if (open F, $config_path) {
         while (<F>) {
             if (/^\s*(?:#.*)?$/) {
@@ -167,7 +165,7 @@ sub read_conf_file {
                 $v =~ s/\\(.)/$1/g;
                 $v =~ s/''/'/g;
                 $conf{$k} = $v;
-            } elsif (/^\s*([a-zA-Z0-9_.-]+)\s*(?:=|\s)\s*(-?[\w.]+)\s*(?:#.*)?$/i) {
+            } elsif (m{^\s*([a-zA-Z0-9_.-]+)\s*(?:=|\s)\s*(-?[[:alnum:]][[:alnum:]._:/-]*)\s*(?:\#.*)?$}i) {
                 # simple value
                 my $v = $2;
                 my $k = $1;
@@ -175,12 +173,10 @@ sub read_conf_file {
                 $conf{$k} = $v;
             } else {
                 chomp;
-                error "Invalid line $. in $config_path: »$_«";
+                error "invalid line $. in $config_path: $_";
             }
         }
         close F;
-    } else {
-        error "could not read $config_path: $!";
     }
 
     return %conf;
@@ -474,8 +470,6 @@ sub cluster_port_running {
 # Arguments: <version> <cluster>
 # Returns: auto | manual | disabled
 sub get_cluster_start_conf {
-    # start.conf setting
-    my $start = 'auto';
     my $start_conf = "$confroot/$_[0]/$_[1]/start.conf";
     if (-e $start_conf) {
 	open F, $start_conf or error "Could not open $start_conf: $!";
@@ -484,16 +478,13 @@ sub get_cluster_start_conf {
 	    s/^\s*//;
 	    s/\s*$//;
 	    next unless $_;
-	    $start = $_;
-	    last;
+            close F;
+            return $1 if (/^(auto|manual|disabled)/);
+            error "Invalid mode in $start_conf, must be one of auto, manual, disabled";
 	}
 	close F;
-
-	error 'Invalid mode in start.conf' unless $start eq 'auto' ||
-	    $start eq 'manual' || $start eq 'disabled';
     }
-
-    return $start;
+    return 'auto'; # default
 }
 
 # Change start.conf setting.
@@ -594,7 +585,7 @@ sub check_pidfile_running {
     my $pid = read_pidfile $_[0];
     if (defined $pid) {
 	prepare_exec;
-	my $res = open PS, '-|', '/bin/ps', '-o', 'comm=', '-p', $pid;
+        my $res = open PS, '-|', '/bin/ps', '-o', 'comm=', '-p', $pid;
 	restore_exec;
 	if ($res) {
 	    my $process = <PS>;
@@ -616,22 +607,22 @@ sub check_pidfile_running {
 # Return a hash with information about a specific cluster (which needs to exist).
 # Arguments: <version> <cluster name>
 # Returns: information hash (keys: pgdata, port, running, logfile [unless it
-#          has a custom one], configdir, owneruid, ownergid, socketdir,
-#          statstempdir)
+#          has a custom one], configdir, owneruid, ownergid, waldir, socketdir,
+#          config->postgresql.conf)
 sub cluster_info {
     my ($v, $c) = @_;
     error 'cluster_info must be called with <version> <cluster> arguments' unless ($v and $c);
 
     my %result;
     $result{'configdir'} = "$confroot/$v/$c";
-    error 'cluster_info called on non-existing cluster $v $c' unless (-e "$result{configdir}/postgresql.conf");
     $result{'configuid'} = (stat "$result{configdir}/postgresql.conf")[4];
 
     my %postgresql_conf = read_cluster_conf_file $v, $c, 'postgresql.conf';
+    $result{'config'} = \%postgresql_conf;
     $result{'pgdata'} = cluster_data_directory $v, $c, \%postgresql_conf;
+    return %result unless (keys %postgresql_conf);
     $result{'port'} = $postgresql_conf{'port'} || $defaultport;
     $result{'socketdir'} = get_cluster_socketdir  $v, $c;
-    $result{'statstempdir'} = $postgresql_conf{'stats_temp_directory'};
 
     # if we can determine the running status with the pid file, prefer that
     if ($postgresql_conf{'external_pid_file'} &&
@@ -648,7 +639,11 @@ sub cluster_info {
     if ($result{'pgdata'}) {
         ($result{'owneruid'}, $result{'ownergid'}) =
             (stat $result{'pgdata'})[4,5];
-        $result{'recovery'} = -e "$result{'pgdata'}/recovery.conf";
+        $result{'recovery'} = 1 if (-e "$result{'pgdata'}/recovery.conf");
+        my $waldirname = $v >= 10 ? 'pg_wal' : 'pg_xlog';
+        if (-l "$result{pgdata}/$waldirname") { # custom wal directory
+            ($result{waldir}) = readlink("$result{pgdata}/$waldirname") =~ /(.*)/; # untaint
+        }
     }
     $result{'start'} = get_cluster_start_conf $v, $c;
 
@@ -659,21 +654,11 @@ sub cluster_info {
     } else {
         $result{'logfile'} = "/var/log/postgresql/postgresql-$v-$c.log";
     }
-    $result{logging_collector} = $postgresql_conf{logging_collector};
-    $result{log_destination} = $postgresql_conf{log_destination};
-    $result{log_directory} = $postgresql_conf{log_directory};
-    $result{log_filename} = $postgresql_conf{log_filename};
-
-    # autovacuum defaults to on since 8.3
-    $result{'avac_enable'} = config_bool $postgresql_conf{'autovacuum'} || ($v >= '8.3');
-
-    # pg_upgradecluster wants to peek at dsmt in the new config
-    $result{dynamic_shared_memory_type} = $postgresql_conf{dynamic_shared_memory_type};
 
     return %result;
 }
 
-# Return an array of all available PostgreSQL versions
+# Return an array of all available psql versions
 sub get_versions {
     my @versions = ();
     my $dir = $binroot;
@@ -691,14 +676,14 @@ sub get_versions {
         }
         closedir D;
     }
-    return @versions;
+    return sort { $a <=> $b } @versions;
 }
 
 # Return the newest available version
 sub get_newest_version {
-    my $newest = 0;
-    map { $newest = $_ if $newest < $_ } get_versions;
-    return $newest;
+    my @versions = get_versions;
+    return undef unless (@versions);
+    return $versions[-1];
 }
 
 # Check whether a version exists
@@ -716,13 +701,14 @@ sub get_version_clusters {
         while (defined ($entry = readdir D)) {
             next if $entry eq '.' || $entry eq '..';
 	    ($entry) = $entry =~ /^(.*)$/; # untaint
-            if (-r $vdir.$entry.'/postgresql.conf') {
+            my $conf = "$vdir$entry/postgresql.conf";
+            if (-e $conf or -l $conf) { # existing file, or dead symlink
                 push @clusters, $entry;
             }
         }
         closedir D;
     }
-    return @clusters;
+    return sort @clusters;
 }
 
 # Check if a cluster exists.
@@ -792,14 +778,16 @@ sub user_cluster_map {
     my $homemapfile = $home . '/.postgresqlrc';
     if (open MAP, $homemapfile) {
 	while (<MAP>) {
-	    s/(.*?)#.*/$1/;
+	    s/#.*//;
 	    next if /^\s*$/;
 	    my ($v,$c,$db) = split;
 	    if (!version_exists $v) {
-		error "$homemapfile line $.: version $v does not exist";
+                print "Warning: $homemapfile line $.: version $v does not exist\n";
+                next;
 	    }
 	    if (!cluster_exists $v, $c and $c !~ /^(\S+):(\d*)$/) {
-		error "$homemapfile line $.: cluster $v/$c does not exist";
+                print "Warning: $homemapfile line $.: cluster $v/$c does not exist\n";
+                next;
 	    }
 	    if ($db) {
 		close MAP;
@@ -815,7 +803,7 @@ sub user_cluster_map {
     # check global map file
     if (open MAP, $mapfile) {
         while (<MAP>) {
-            s/(.*?)#.*/$1/;
+            s/#.*//;
             next if /^\s*$/;
             my ($u,$g,$v,$c,$db) = split;
             if (!$db) {
@@ -823,10 +811,12 @@ sub user_cluster_map {
                 next;
             }
 	    if (!version_exists $v) {
-		error "$mapfile line $.: version $v does not exist";
+                print "Warning: $mapfile line $.: version $v does not exist\n";
+                next;
 	    }
 	    if (!cluster_exists $v, $c and $c !~ /^(\S+):(\d*)$/) {
-		error "$mapfile line $.: cluster $v/$c does not exist";
+                print "Warning: $mapfile line $.: cluster $v/$c does not exist\n";
+                next;
 	    }
             if (($u eq "*" || $u eq $user) && ($g eq "*" || $g eq $group)) {
                 close MAP;
@@ -910,7 +900,7 @@ sub get_db_encoding {
     $ENV{'LC_ALL'} = 'C';
     my $orig_euid = $>;
     $> = (stat (cluster_data_directory $version, $cluster))[4];
-    open PSQL, '-|', $psql, '-h', $socketdir, '-p', $port, '-Atc',
+    open PSQL, '-|', $psql, '-h', $socketdir, '-p', $port, '-AXtc',
         'select getdatabaseencoding()', $db or
         die "Internal error: could not call $psql to determine db encoding: $!";
     my $out = <PSQL>;
@@ -936,21 +926,21 @@ sub get_db_locales {
     return undef unless ($port && $socketdir && $psql);
     my ($ctype, $collate);
 
-    # try to swich to cluster owner
+    # try to switch to cluster owner
     prepare_exec 'LC_ALL';
     $ENV{'LC_ALL'} = 'C';
     my $orig_euid = $>;
     $> = (stat (cluster_data_directory $version, $cluster))[4];
-    open PSQL, '-|', $psql, '-h', $socketdir, '-p', $port, '-Atc',
+    open PSQL, '-|', $psql, '-h', $socketdir, '-p', $port, '-AXtc',
         'SHOW lc_ctype', $db or
         die "Internal error: could not call $psql to determine db lc_ctype: $!";
-    my $out = <PSQL>;
+    my $out = <PSQL> // error 'could not determine db lc_ctype';
     close PSQL;
     ($ctype) = $out =~ /^([\w.\@-]+)$/; # untaint
-    open PSQL, '-|', $psql, '-h', $socketdir, '-p', $port, '-Atc',
+    open PSQL, '-|', $psql, '-h', $socketdir, '-p', $port, '-AXtc',
         'SHOW lc_collate', $db or
         die "Internal error: could not call $psql to determine db lc_collate: $!";
-    $out = <PSQL>;
+    $out = <PSQL> // error 'could not determine db lc_collate';
     close PSQL;
     ($collate) = $out =~ /^([\w.\@-]+)$/; # untaint
     $> = $orig_euid;
@@ -1044,7 +1034,7 @@ sub get_cluster_databases {
 
     my @dbs;
     my @fields;
-    if (open PSQL, '-|', $psql, '-h', $socketdir, '-p', $port, '-Atl') {
+    if (open PSQL, '-|', $psql, '-h', $socketdir, '-p', $port, '-AXtl') {
         while (<PSQL>) {
             chomp;
             @fields = split '\|';

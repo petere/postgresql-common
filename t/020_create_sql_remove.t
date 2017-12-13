@@ -3,6 +3,7 @@
 
 use strict; 
 
+use File::Temp qw(tempdir);
 use POSIX qw/dup2/;
 use Time::HiRes qw/usleep/;
 
@@ -10,7 +11,7 @@ use lib 't';
 use TestLib;
 use PgCommon;
 
-use Test::More tests => 131 * ($#MAJORS+1);
+use Test::More tests => 131 * @MAJORS;
 
 $ENV{_SYSTEMCTL_SKIP_REDIRECT} = 1; # FIXME: testsuite is hanging otherwise
 
@@ -19,8 +20,10 @@ sub check_major {
     note "Running tests for $v";
 
     # create cluster
-    ok ((system "pg_createcluster $v main --start >/dev/null") == 0,
-	"pg_createcluster $v main");
+    my $xlogdir = tempdir("/tmp/$v.xlog.XXXXXX", CLEANUP => 1);
+    rmdir $xlogdir; # recreated by initdb
+    ok ((system "pg_createcluster $v main --start -- -X $xlogdir >/dev/null") == 0,
+	"pg_createcluster $v main"); # -X needs 8.3+
 
     # check that a /var/run/postgresql/ pid file is created
     my @contents = ('.s.PGSQL.5432', '.s.PGSQL.5432.lock', "$v-main.pid", "$v-main.pg_stat_tmp");
@@ -31,6 +34,11 @@ sub check_major {
     } else {
         ok_dir '/var/run/postgresql/', [grep {/main/} @contents], 'Pid File is in /var/run/postgresql/';
     }
+
+    # check that the xlog/wal symlink was created
+    my $first_xlog = $v >= 9.0 ? "000000010000000000000001" : "000000010000000000000000";
+    ok_dir $xlogdir, [$first_xlog, "archive_status"],
+        "xlog/wal directory $xlogdir was created";
 
     # verify that exactly one postgres master is running
     my @pm_pids = pidof ('postgres');
@@ -135,7 +143,8 @@ sub check_major {
         'restarting cluster with explicitly configured log file');
     ok -z $default_log, "default log is not used";
     ok !-z $p, "log symlink target is used for startup message";
-    my @l = glob ((PgCommon::cluster_data_directory $v, 'main') .  "/pg_log/$v#main.log*");
+    my $pg_log = $v >= 10 ? 'log' : 'pg_log'; # log directory in PGDATA changed in PG 10
+    my @l = glob ((PgCommon::cluster_data_directory $v, 'main') .  "/$pg_log/$v#main.log*");
     is $#l, 0, 'exactly one log file';
     ok (-e $l[0] && ! -z $l[0], 'custom log is actually used');
     SKIP: { skip "no logging_collector in $v", 2 if ($v < 8.3);
@@ -204,10 +213,15 @@ tel  | 2
 tel|2
 ', 'SQL command output: select -tAx';
 
+    sub create_extension ($) {
+        return "psql -qc 'CREATE EXTENSION $_[0]' nobodydb" if ($v >= 9.1);
+        return "createlang $_[0] nobodydb";
+    }
+
     # Check PL/Perl untrusted
     my $fn_cmd = 'CREATE FUNCTION read_file() RETURNS text AS \'open F, \\"/etc/passwd\\"; \\$buf = <F>; close F; return \\$buf;\' LANGUAGE plperl';
-    is ((exec_as 'nobody', 'createlang plperlu nobodydb'), 1, 'createlang plperlu fails for user nobody');
-    is_program_out 'postgres', 'createlang plperlu nobodydb', 0, '', 'createlang plperlu succeeds for user postgres';
+    is ((exec_as 'nobody', create_extension('plperlu')), 1, 'CREATE EXTENSION plperlu fails for user nobody');
+    is_program_out 'postgres', create_extension('plperlu'), 0, '', 'CREATE EXTENSION plperlu succeeds for user postgres';
     is ((exec_as 'nobody', "psql nobodydb -qc \"${fn_cmd}u;\""), 1, 'creating PL/PerlU function as user nobody fails');
     is ((exec_as 'postgres', "psql nobodydb -qc \"${fn_cmd};\""), 1, 'creating unsafe PL/Perl function as user postgres fails');
     is_program_out 'postgres', "psql nobodydb -qc \"${fn_cmd}u;\"", 0, '', 'creating PL/PerlU function as user postgres succeeds';
@@ -216,7 +230,7 @@ tel|2
 
     # Check PL/Perl trusted
     my $pluser = ($v >= '8.3') ? 'nobody' : 'postgres'; # pg_pltemplate allows non-superusers to install trusted languages in 8.3+
-    is_program_out $pluser, 'createlang plperl nobodydb', 0, '', "createlang plperl succeeds for user $pluser";
+    is_program_out $pluser, create_extension('plperl'), 0, '', "CREATE EXTENSION plperl succeeds for user $pluser";
     is ((exec_as 'nobody', "psql nobodydb -qc \"${fn_cmd};\""), 1, 'creating unsafe PL/Perl function as user nobody fails');
     is_program_out 'nobody', 'psql nobodydb -qc "CREATE FUNCTION remove_vowels(text) RETURNS text AS \'\\$_[0] =~ s/[aeiou]/_/ig; return \\$_[0];\' LANGUAGE plperl;"',
 	0, '', 'creating PL/Perl function as user nobody succeeds';
@@ -224,7 +238,7 @@ tel|2
 	0, "f__b_r_sh\n", 'calling PL/Perl function';
 
     # Check PL/Python (untrusted)
-    is_program_out 'postgres', 'createlang plpythonu nobodydb', 0, '', 'createlang plpythonu succeeds for user postgres';
+    is_program_out 'postgres', create_extension('plpythonu'), 0, '', 'CREATE EXTENSION plpythonu succeeds for user postgres';
     is_program_out 'postgres', 'psql nobodydb -qc "CREATE FUNCTION capitalize(text) RETURNS text AS \'import sys; return args[0].capitalize() + sys.version[0]\' LANGUAGE plpythonu;"',
 	0, '', 'creating PL/Python function as user postgres succeeds';
     is_program_out 'nobody', 'psql nobodydb -Atc "select capitalize(\'foo\')"',
@@ -232,7 +246,7 @@ tel|2
 
     # Check PL/Python3 (untrusted)
     if ($v >= '9.1' and not $PgCommon::rpm) {
-	is_program_out 'postgres', 'createlang plpython3u nobodydb', 0, '', 'createlang plpython3u succeeds for user postgres';
+	is_program_out 'postgres', create_extension('plpython3u'), 0, '', 'CREATE EXTENSION plpython3u succeeds for user postgres';
 	is_program_out 'postgres', 'psql nobodydb -qc "CREATE FUNCTION capitalize3(text) RETURNS text AS \'import sys; return args[0].capitalize() + sys.version[0]\' LANGUAGE plpython3u;"',
 	    0, '', 'creating PL/Python3 function as user postgres succeeds';
 	is_program_out 'nobody', 'psql nobodydb -Atc "select capitalize3(\'foo\')"',
@@ -247,8 +261,8 @@ tel|2
     }
 
     # Check PL/Tcl (trusted/untrusted)
-    is_program_out 'postgres', 'createlang pltcl nobodydb', 0, '', 'createlang pltcl succeeds for user postgres';
-    is_program_out 'postgres', 'createlang pltclu nobodydb', 0, '', 'createlang pltclu succeeds for user postgres';
+    is_program_out 'postgres', create_extension('pltcl'), 0, '', 'CREATE EXTENSION pltcl succeeds for user postgres';
+    is_program_out 'postgres', create_extension('pltclu'), 0, '', 'CREATE EXTENSION pltclu succeeds for user postgres';
     is_program_out 'nobody', 'psql nobodydb -qc "CREATE FUNCTION tcl_max(integer, integer) RETURNS integer AS \'if {\\$1 > \\$2} {return \\$1}; return \\$2\' LANGUAGE pltcl STRICT;"',
 	0, '', 'creating PL/Tcl function as user nobody succeeds';
     is_program_out 'postgres', 'psql nobodydb -qc "CREATE FUNCTION tcl_max_u(integer, integer) RETURNS integer AS \'if {\\$1 > \\$2} {return \\$1}; return \\$2\' LANGUAGE pltclu STRICT;"',
@@ -362,6 +376,7 @@ tel|2
     ok ((system "pg_dropcluster $v main --stop") == 0,
 	'pg_dropcluster removes cluster');
 
+    is (-e $xlogdir, undef, "xlog/wal directory $xlogdir was deleted");
     check_clean;
 }
 

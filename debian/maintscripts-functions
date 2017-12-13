@@ -28,6 +28,8 @@ _link_manpages() {
 	fi
     fi
 
+    # user might have removed the directories, allow u-a to succeed
+    mkdir -p /usr/share/man/man1 /usr/share/man/man3 /usr/share/man/man7
     section=$(echo "$2" | sed -e 's/.*\.\(.*\)\..*/man\1/')
     update-alternatives --install /usr/share/man/$section/$2 \
 	$2 /usr/share/postgresql/$1/man/$section/$2 \
@@ -36,6 +38,8 @@ _link_manpages() {
 
 # arguments: version master
 _unlink_manpages() {
+    # user might have removed the directories, allow u-a to succeed
+    mkdir -p /usr/share/man/man1 /usr/share/man/man3 /usr/share/man/man7
     section=$(echo "$2" | sed -e 's/.*\.\(.*\)\..*/man\1/')
     update-alternatives --remove $2 /usr/share/postgresql/$1/man/$section/$2
 }
@@ -74,11 +78,11 @@ configure_version() {
     if [ ! -d "/etc/postgresql/$VERSION" ] || [ -z "$(ls /etc/postgresql/$VERSION)" ] || \
        [ -z "$(ls /etc/postgresql/$VERSION/*/postgresql.conf 2>/dev/null)" ]; then
         # skip creating the main cluster when this is not the first install, or
-        # when explicitely disabled ($create is 1/0/"")
-        create=$(perl -I/usr/share/postgresql-common -mPgCommon -e 'print PgCommon::config_bool(PgCommon::get_conf_value 0, 0, "createcluster.conf", "create_main_cluster")')
-        if [ -z "$2" ] && [ "$create" != "0" ]; then
+        # when explicitly disabled ($create is on/off/"")
+        create=$(pg_conftool /etc/postgresql-common/createcluster.conf show -bs create_main_cluster || :)
+        if [ -z "$2" ] && [ "$create" != "off" ]; then
             set_system_locale
-            /usr/bin/pg_createcluster -u postgres $VERSION main || 
+            pg_createcluster -u postgres $VERSION main ||
                 echo "Error: could not create default cluster. Please create it manually with
 
   pg_createcluster $VERSION main --start
@@ -95,27 +99,19 @@ or a similar command (see 'man pg_createcluster')." >&2
     # done with debconf
     db_stop
 
-    if [ -x /etc/init.d/postgresql ] && [ ! -x /etc/init.d/postgresql-$VERSION ]; then
-       # reload systemd to let the generator pick up the new unit
-       if [ -d /run/systemd/system ]; then
-           systemctl daemon-reload
-       fi
-       if [ -x "`which invoke-rc.d 2>/dev/null`" ]; then
-           invoke-rc.d postgresql start $VERSION || exit $?
-       else
-           /etc/init.d/postgresql start $VERSION || exit $?
-       fi
+    # reload systemd to let the generator pick up the new unit
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
     fi
+    invoke-rc.d postgresql start $VERSION # systemd: argument ignored, starts all versions
 }
 
 stop_version() {
-    if [ -x /etc/init.d/postgresql ] && [ ! -x /etc/init.d/postgresql-$1 ]; then
-       if [ -x "`which invoke-rc.d 2>/dev/null`" ]; then
-                invoke-rc.d postgresql stop $1 || exit $?
-        else
-                /etc/init.d/postgresql stop $1 || exit $?
-        fi
-
+    if [ -d /run/systemd/system ]; then
+        # cannot use invoke-rc.d here because jessie's version doesn't like patterns
+        deb-systemd-invoke stop "postgresql@$1-*"
+    else
+        invoke-rc.d postgresql stop $1
     fi
 }
 
@@ -191,7 +187,7 @@ preinst_check_catversion()
                 (
                     cd "$VARTMPDIR"
                     mkdir bin lib # lib needs to exists, but we do not copy files there
-                    for f in pg_ctl pg_dump pg_resetxlog postgres; do
+                    for f in pg_ctl pg_dump pg_resetwal postgres; do
                         cp -a /usr/lib/postgresql/$MAJOR_VER/bin/$f bin
                     done
                 )

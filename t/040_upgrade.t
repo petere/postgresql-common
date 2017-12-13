@@ -3,7 +3,7 @@
 
 use strict; 
 
-use File::Temp qw/tempdir/;
+use File::Temp qw/tempfile tempdir/;
 use POSIX qw/dup2/;
 use Time::HiRes qw/usleep/;
 
@@ -11,9 +11,9 @@ use lib 't';
 use TestLib;
 use PgCommon;
 
-use Test::More tests => ($#MAJORS == 0) ? 1 : 116 * 3;
+use Test::More tests => (@MAJORS == 1) ? 1 : 107 * 3;
 
-if ($#MAJORS == 0) {
+if (@MAJORS == 1) {
     pass 'only one major version installed, skipping upgrade tests';
     exit 0;
 }
@@ -63,11 +63,15 @@ is_program_out 'nobody', 'psql -Atc "SELECT nextval(\'odd10\')" test', 0, "3\n",
     'check next sequence value';
 
 # create a large object
-is_program_out 'postgres', 'psql -Atc "SELECT lo_from_bytea(1234, \'Hello world\')"', 0, "1234\n",
+my ($fh, $filename) = tempfile("lo_import.XXXXXX", TMPDIR => 1, UNLINK => 1);
+print $fh "Hello world";
+close $fh;
+chmod 0644, $filename;
+is_program_out 'postgres', "psql -Atc \"SELECT lo_import('$filename', 1234)\"", 0, "1234\n",
     'create large object';
 
 # create stored procedures
-if ($MAJORS[0] < '9.0') {
+if ($MAJORS[0] < 9.0) {
     is_program_out 'postgres', 'createlang plpgsql test', 0, '', 'createlang plpgsql test';
 } else {
     pass '>= 9.0 enables PL/pgsql by default';
@@ -134,35 +138,6 @@ rmdir '/tmp/pgtest';
 mkdir '/tmp/pgtest/' or die "Could not create temporary test directory /tmp/pgtest: $!";
 chmod 0100, '/tmp/pgtest/';
 chdir '/tmp/pgtest';
-
-# upgrade attempt fails cleanly if the server is busy
-my $psql = fork;
-if (!$psql) {
-    my @pw = getpwnam 'nobody';
-    change_ugid $pw[2], $pw[3];
-    # suppress 'could not change directory to "/tmp/pgtest"'
-    chdir '/tmp';
-    # pg_upgradecluster below will timeout after 5s
-    exec 'psql', '-c', 'select pg_sleep(15)', 'postgres' or die "could not exec psql process: $!";
-}
-usleep $delay;
-
-like_program_out 0, "pg_upgradecluster -v $MAJORS[-1] $upgrade_options $MAJORS[0] upgr", 1, 
-    qr/Error: Could not stop old cluster/,
-    'pg_upgradecluster fails on busy cluster';
-like_program_out 'nobody', 'pg_lsclusters -h', 0,
-    qr/^$MAJORS[0]\s+upgr\s+5432 online postgres/;
-
-kill 9, $psql;
-waitpid $psql, 0;
-
-# now that the connection went away, postgres shuts down; so restart it
-# properly
-system "pg_ctlcluster $MAJORS[0] upgr stop";
-sleep 5;
-like_program_out 'nobody', 'pg_lsclusters -h', 0,
-    qr/^$MAJORS[0]\s+upgr\s+5432 down\s+postgres/;
-is ((system "pg_ctlcluster $MAJORS[0] upgr start"), 0, 'Starting upgr cluster');
 
 # Upgrade to latest version
 my $outref;

@@ -4,7 +4,7 @@
 #
 # (C) 2005-2009 Martin Pitt <mpitt@debian.org>
 # (C) 2013 Peter Eisentraut <petere@debian.org>
-# (C) 2013-2016 Christoph Berg <myon@debian.org>
+# (C) 2013-2017 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@ use strict;
 use warnings;
 use PgCommon;
 use Getopt::Long;
-use POSIX;
+use POSIX qw(lchown);
 
 # untaint environment
 $ENV{'PATH'} = '/bin:/usr/bin';
@@ -30,6 +30,7 @@ delete @ENV{'IFS', 'CDPATH', 'ENV', 'BASH_ENV'};
 my ($version, $newversion, $cluster, $newcluster);
 my (%info, %newinfo);
 my ($encoding, $old_lc_ctype, $old_lc_collate); # old cluster encoding
+my $maintenance_db = 'template1';
 
 # do not trip over cwd not being accessible to postgres superuser
 chdir '/';
@@ -127,7 +128,7 @@ sub adapt_conffiles {
 	}
 	close O;
 	close N;
-	chown $newinfo{'owneruid'}, $newinfo{'ownergid'}, "$hba.new";
+	lchown $newinfo{'owneruid'}, $newinfo{'ownergid'}, "$hba.new";
 	chmod 0640, "$hba.new";
 	rename "$hba.new", $hba or error "rename: $!";
     }
@@ -167,7 +168,7 @@ sub adapt_conffiles {
         deprecate \%c, 'krb_srvname', 'native krb5 authentication deprecated in favor of GSSAPI';
         # grab dsmt from the new config just written by initdb
         unless ($c{dynamic_shared_memory_type}) {
-            set 'dynamic_shared_memory_type', ($newinfo{dynamic_shared_memory_type} || 'mmap');
+            set 'dynamic_shared_memory_type', ($newinfo{config}->{dynamic_shared_memory_type} || 'mmap');
         }
     }
 
@@ -186,6 +187,11 @@ sub adapt_conffiles {
             set 'cluster_name', $cluster_name;
         }
     }
+
+    if ($newversion >= '10') {
+        rename_ \%c, 'min_parallel_relation_size', 'min_parallel_table_scan_size';
+        deprecate \%c, 'sql_inheritance', 'does not exist anymore';
+    }
 }
 
 # Save original pg_hba.conf, replace it with one that only allows local access
@@ -202,7 +208,7 @@ sub disable_connections {
         error "could not create $hba";
     }
     chmod 0400, $hba;
-    chown $_[3], 0, $hba;
+    lchown $_[3], 0, $hba;
     if ($_[0] >= '8.4') {
 	print F "local all $_[2] ident\n";
     } else {
@@ -224,11 +230,11 @@ sub enable_connections {
 # Arguments: <version> <cluster>
 sub get_encoding {
     my ($version, $cluster) = @_;
-    $encoding = get_db_encoding $version, $cluster, 'template1';
+    $encoding = get_db_encoding $version, $cluster, $maintenance_db;
     if ($version <= '8.3') {
 	($old_lc_ctype, $old_lc_collate) = get_cluster_locales $version, $cluster;
     } else {
-	($old_lc_ctype, $old_lc_collate) = get_db_locales $version, $cluster, 'template1';
+	($old_lc_ctype, $old_lc_collate) = get_db_locales $version, $cluster, $maintenance_db;
     }
     unless ($encoding && $old_lc_ctype && $old_lc_collate) {
 	error 'could not get cluster locales';
@@ -275,6 +281,7 @@ GetOptions ('v|version=s' => \$newversion,
 	    'k|link' => \$link,
             'rename=s' => \$newcluster,
             'old-bindir=s' => \$old_bindir,
+            'maintenance-db=s' => \$maintenance_db,
     ) or exit 1;
 
 $method eq 'dump' or $method eq 'upgrade' or error 'method must be "dump" or "upgrade"';
@@ -291,6 +298,7 @@ $link and $method eq 'dump' and error 'cannot use --link with --method=dump';
 ($lc_time) = $lc_time =~ /^([\w@._-]+)$/ if $lc_time;
 ($logfile) = $logfile =~ /^([^\n]+)$/ if $logfile;
 ($old_bindir) = $old_bindir =~ /^(\/.*)$/ if $old_bindir;
+($maintenance_db) = $maintenance_db =~ /^([\w-]+)$/ if $maintenance_db;
 
 if ($#ARGV < 1) {
     print "Usage: $0 [OPTIONS] <old version> <cluster name> [<new data directory>]\n";
@@ -329,8 +337,7 @@ my $old_hba_modified;
 if ($info{'running'}) {
     get_encoding $version, $cluster;
     print "Stopping old cluster...\n";
-    my @argv = ('pg_ctlcluster', $version, $cluster, 'stop', '--');
-    push @argv, ('-t', '5') if $version >= '8.4';
+    my @argv = ('pg_ctlcluster', $version, $cluster, 'stop');
     error "Could not stop old cluster" if system @argv;
 }
 
@@ -350,8 +357,7 @@ if ($method eq 'dump' or ($method eq 'upgrade' and not $info{'running'})) {
 
     if ($method eq 'upgrade') {
 	print "Stopping old cluster...\n";
-	@argv = ('pg_ctlcluster', $version, $cluster, 'stop', '--');
-	push @argv, ('-t', '5') if $version >= '8.4';
+        @argv = ('pg_ctlcluster', $version, $cluster, 'stop');
 	error "Could not stop old cluster" if system @argv;
     }
 }
@@ -379,6 +385,7 @@ push @argv, ('--lc-time', $lc_time) if $lc_time;
 delete $ENV{'LC_ALL'};
 push @argv, ('--', '--data-checksums') if $oldcontrol->{'Data page checksum version'}; # 0 = off
 error "Could not create target cluster" if system @argv;
+print "\n";
 
 %newinfo = cluster_info($newversion, $newcluster);
 
@@ -425,7 +432,7 @@ if ($upgrade_scripts) {
         exit 0;
     }
     wait;
-    if ($?) {
+    if ($? > 0) {
         print STDERR "Error during running upgrade hooks, removing new cluster\n";
         system 'pg_dropcluster', '--stop', $newversion, $newcluster;
         exit 1;
@@ -445,7 +452,7 @@ if (!fork) {
 	# get list of databases (value = datallowconn)
 	my %databases;
 	open F, '-|', $oldpsql, '-h', $oldsocket, '-p', $info{'port'}, 
-	    '-F|', '-d', 'template1', '-Atc', 
+	    '-F|', '-d', $maintenance_db, '-AXtc',
 	    'SELECT datname, datallowconn FROM pg_database' or
 	    error 'Could not get pg_database list';
 	while (<F>) {
@@ -462,8 +469,8 @@ if (!fork) {
 
 	    unless ($databases{$db}) {
 		print "Temporarily enabling access to database $db\n";
-		(system $oldpsql, '-h', $oldsocket, '-p', $info{'port'}, '-q', 
-		    '-d', 'template1', '-c', 
+		(system $oldpsql, '-h', $oldsocket, '-p', $info{'port'}, '-qX',
+		    '-d', $maintenance_db, '-c',
 		    "BEGIN READ WRITE; UPDATE pg_database SET datallowconn = 't' WHERE datname = '$db'; COMMIT") == 0 or
 		    error 'Could not enable access to database';
 	    }
@@ -486,7 +493,7 @@ if (!fork) {
 
 	# create global objects in target cluster
 	open SINK, '|-', $psql, '-h', $newsocket, '-p', $newinfo{'port'},
-	    '-q', '-d', 'template1' or 
+	    '-qX', '-d', $maintenance_db or
 	    error 'Could not execute psql for new cluster';
 
 	# ensure that we can upgrade tables for DBs with default read-only
@@ -507,14 +514,14 @@ if (!fork) {
 	    # starting from 9.0, replace() works on strings; for earlier versions it
 	    # works on bytea
 	    if ($version >= '9.0') {
-		(system $psql, '-h', $oldsocket, '-p', $info{'port'}, '-q', '-d',
+		(system $psql, '-h', $oldsocket, '-p', $info{'port'}, '-qX', '-d',
 		    $db, '-c', "BEGIN READ WRITE; \
 			UPDATE pg_proc SET probin = replace(\
 			replace(probin, '/usr/lib/postgresql/lib', '\$libdir'), \
 			'/usr/lib/postgresql/$version/lib', '\$libdir'); COMMIT") == 0 or
 		    error 'Could not fix library paths';
 	    } else {
-		(system $psql, '-h', $oldsocket, '-p', $info{'port'}, '-q', '-d',
+		(system $psql, '-h', $oldsocket, '-p', $info{'port'}, '-qX', '-d',
 		    $db, '-c', "BEGIN READ WRITE; \
 			UPDATE pg_proc SET probin = decode(replace(\
 		       replace(encode(probin, 'escape'), '/usr/lib/postgresql/lib', '\$libdir'), \
@@ -551,25 +558,25 @@ if (!fork) {
 
 	    # clean up
 	    print 'Analyzing database ', $db, "...\n";
-	    (system $psql, '-h', $newsocket, '-p', $newinfo{'port'}, '-q', 
+	    (system $psql, '-h', $newsocket, '-p', $newinfo{'port'}, '-qX',
 		'-d', $db, '-c', 'ANALYZE') == 0 or
 		error 'Could not ANALYZE database';
 
 	    unless ($databases{$db}) {
 		print "Disabling access to database $db again\n";
-		(system $oldpsql, '-h', $oldsocket, '-p', $info{'port'}, '-q', 
-		    '-d', 'template1', '-c', 
+		(system $oldpsql, '-h', $oldsocket, '-p', $info{'port'}, '-qX',
+		    '-d', $maintenance_db, '-c',
 		    "BEGIN READ WRITE; UPDATE pg_database SET datallowconn = 'f' where datname = '$db'; COMMIT") == 0 or
 		    error 'Could not disable access to database in old cluster';
-		(system $psql, '-h', $newsocket, '-p', $newinfo{'port'}, '-q', 
-		    '-d', 'template1', '-c', 
+		(system $psql, '-h', $newsocket, '-p', $newinfo{'port'}, '-qX',
+		    '-d', $maintenance_db, '-c',
 		    "BEGIN READ WRITE; UPDATE pg_database SET datallowconn = 'f' where datname = '$db'; COMMIT") == 0 or
 		    error 'Could not disable access to database in new cluster';
 	    }
 	}
 
 	# reset owner specific override for default read-only transactions
-	(system $psql, '-h', $newsocket, '-p', $newinfo{'port'}, '-q', 'template1', '-c', 
+	(system $psql, '-h', $newsocket, '-p', $newinfo{'port'}, '-qX', $maintenance_db, '-c',
 	    "BEGIN READ WRITE; ALTER USER $owner RESET default_transaction_read_only; COMMIT;\n") == 0 or
 	    error 'Could not reset default_transaction_read_only value for superuser';
     } else {
@@ -582,11 +589,15 @@ if (!fork) {
 	my @argv = ($pg_upgrade,
 		 '-b', ($old_bindir || "$PgCommon::binroot$version/bin"),
 		 '-B', "$PgCommon::binroot$newversion/bin",
-		 '-d', $info{'pgdata'},
-		 '-D', $newinfo{'pgdata'},
 		 '-p', $info{'port'},
 		 '-P', $newinfo{'port'},
 	    );
+        if ($version <= 9.1) {
+            push @argv, '-d', $info{pgdata}, '-o', "-D $info{configdir}"; # -o and -D configdir require $newversion >= 9.2
+        } else {
+            push @argv, '-d', $info{configdir};
+        }
+        push @argv, '-D', $newinfo{configdir};
 	push @argv, "--link" if $link;
 
 	# Make a directory for pg_upgrade to store its reports and log
@@ -594,25 +605,10 @@ if (!fork) {
 	my $logdir = tempdir("/var/log/postgresql/pg_upgradecluster-$version-$newversion-$newcluster.XXXX");
 	chdir $logdir;
 
-	# pg_upgrade doesn't support separate configuration and data
-	# directories, so we must fix this up temporarily.  (In 9.2+,
-	# this could be done with the pg_upgrade -o/-O options (see
-	# man page), but we want to support some earlier versions as
-	# well for a while.)
-	foreach my $file ('postgresql.conf', 'pg_hba.conf', 'pg_ident.conf') {
-	    -l "$info{pgdata}/$file" or
-		symlink("$info{configdir}/$file", "$info{pgdata}/$file") or
-		error "could not create symlink $info{pgdata}/$file";
-	    -l "$newinfo{pgdata}/$file" or
-		symlink("$newinfo{configdir}/$file", "$newinfo{pgdata}/$file") or
-		error "could not create symlink $newinfo{pgdata}/$file";
-	}
 	# Run pg_upgrade.
+        print "@argv\n";
 	my $status = system @argv;
-	# And remove the temporary configuration files again.
-	foreach my $file ('postgresql.conf', 'pg_hba.conf', 'pg_ident.conf') {
-	    unlink($newinfo{'pgdata'}."/$file");
-	}
+
 	# Remove the PID file of the old cluster (normally removed by
 	# pg_ctlcluster, but not by pg_upgrade).
 	unlink "/var/run/postgresql/$version-$cluster.pid";
@@ -734,9 +730,10 @@ if ($upgrade_scripts) {
 
 print "Success. Please check that the upgraded cluster works. If it does,
 you can remove the old cluster with
+    pg_dropcluster $version $cluster\n\n";
 
-  pg_dropcluster $version $cluster
-"
+system 'pg_lsclusters', $version, $cluster;
+system 'pg_lsclusters', $newversion, $newcluster;
 
 __END__
 
@@ -814,13 +811,17 @@ In pg_upgrade mode, use hard links instead of copying files to the new
 cluster.  This option is merely passed on to pg_upgrade.  See
 L<pg_upgrade(1)> for details.
 
-=item B<--rename> I<new cluster name>
+=item B<--rename=>I<new cluster name>
 
 Use a different name for the upgraded cluster.
 
-=item B<--old-bindir> I<directory>
+=item B<--old-bindir=>I<directory>
 
 Passed to B<pg_upgrade>.
+
+=item B<--maintenance-db=>I<database>
+
+Database to connect to for maintenance queries.  The default is B<template1>.
 
 =back
 
@@ -845,7 +846,7 @@ Phases:
 =item B<init>
 
 A virgin cluster of version I<new version> has been created, i. e.  this new
-cluster will already have B<template1>, but no user databases. Please note that
+cluster will already have B<template1> and B<postgres>, but no user databases. Please note that
 you should not create tables in this phase, since they will be overwritten by
 the dump/restore or B<pg_upgrade> operation.
 

@@ -1,3 +1,172 @@
+postgresql-common (188) unstable; urgency=medium
+
+  * pg_ctlcluster, pg_createcluster, pg_upgradecluster: Use lchown instead
+    of chown to mitigate privilege escalation via symlinks. (CVE-2017-8806.
+    Related to CVE-2017-12172 in PostgreSQL; extends our earlier fix for
+    CVE-2016-1255.)
+  * dh_make_pgxs: Add options to set package name and version.
+  * pg_lsclusters: Raise error when called on a specific cluster that does not
+    exist. This was the behavior before the "accept dead postgresql.conf
+    symlinks" change, but not coded explicitly.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Wed, 08 Nov 2017 16:03:19 +0100
+
+postgresql-common (187) unstable; urgency=medium
+
+  * Consistently call psql -X. (Closes: #877920)
+  * Update pt translation, thanks Ricardo Silva! (Closes: #872430)
+  * pg_virtualenv: Drop "BUG" message that really just means that
+    pg_createcluster threw an error.
+  * pg_createcluster: Drop new cluster if --start was requested and starting
+    fails.
+  * pg_createcluster: If not running as postgres or root, don't attempt to
+    install config and data parent directories with owner postgres.
+  * pg_lsclusters, postgresql-generator, get_version_clusters, cluster_info,
+    read_conf_file: Accept dead postgresql.conf symlinks, filesystem might not
+    be mounted yet.
+  * pg_virtualenv: Fix version comparison when determining newest PG major.
+  * pg_updatedicts, postgresql-common.postinst: Create tsearch dictionaries on
+    first install and set umask for correct permissions. (Closes: #868232)
+    Thanks to Christian Ehrhardt for the analysis!
+  * Demote postgresql-common hunspell/myspell triggers to noawait.
+
+ -- Christoph Berg <myon@debian.org>  Sun, 22 Oct 2017 20:44:38 +0200
+
+postgresql-common (186) unstable; urgency=medium
+
+  * Team upload.
+  * Bump default apt.postgresql.org version to 10.
+  * t/020_create_sql_remove.t: Support 8.x xlog filenames.
+  * Update ca translation, thanks Innocent De Marchi! (Closes: #876472)
+  * PgCommon.pm: Use BSD ps syntax in check_pidfile_running.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Thu, 05 Oct 2017 16:04:18 +0200
+
+postgresql-common (185) unstable; urgency=medium
+
+  * Team upload.
+
+  [ Christoph Berg ]
+  * Revert "Error out if a recovery.conf file is found in /etc/postgresql".
+    It caused too many false positives for setups where a recovery.conf
+    template is located in the etc directory. (Closes: #868367)
+  * Bump default PostgreSQL version to 10.
+
+  [ Marco Nenciarini ]
+  * supported-versions: correctly detect version 10 when using 'installed'.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Thu, 21 Sep 2017 12:07:30 +0200
+
+postgresql-common (184) unstable; urgency=high
+
+  * debian/maintscripts-functions: Use deb-systemd-invoke instead of
+    invoke-rc.d to stop "postgresql@$ver-*"; jessie's invoke-rc.d does not
+    support service patterns.
+
+ -- Christoph Berg <myon@debian.org>  Tue, 11 Jul 2017 20:19:21 +0200
+
+postgresql-common (183) unstable; urgency=medium
+
+  * Team upload.
+
+  [ Nishanth Aravamudan ]
+  * debian/supported-versions: add Ubuntu 17.10. (Closes: #862420)
+
+  [ Bernd Helmle ]
+  * postgresql-common.spec: Fix installation path of manpages.
+
+  [ Alex Badics ]
+  * pg_ctlcluster: Use pg_ctl.conf during stop too.
+
+  [ Christoph Berg ]
+  * PgCommon.pm: Sort get_versions and get_version_clusters output.
+  * PgCommon.pm: Revert to old quote_conf_value behavior, the new regexp was
+    too liberal. The new input behavior is retained, though.
+  * pg_ctlcluster: Error out if a recovery.conf file is found in
+    /etc/postgresql to catch a common mistake. (Closes: #853868)
+  * pg_upgradecluster: Allow configuring the maintenance database.
+    (Closes: #851874)
+  * pg_upgradecluster: Pass config directory to pg_upgrade instead of
+    symlinking the config files. This breaks using "-m upgrade" for upgrades
+    *to* versions before 9.2; upgrades from older versions are unaffected.
+  * pg_upgradecluster, pg_renamecluster: Use default pg_ctl timeout when
+    stopping cluster.
+  * pg_dropcluster: Remove custom xlog directory. (Closes: #830789)
+  * pg_createcluster, pg_ctlcluster: cd / to prevent warnings from PostgreSQL
+    tools. (Closes: #834264)
+  * pg_wrapper: Don't fail if no local cluster exists on port 5432.
+    Code cleanup. (Closes: #777623)
+  * pg_lsclusters: --start-conf shows start.conf information.
+  * createcluster.conf: Add add_include_dir='conf.d' for drop-in PostgreSQL
+    config snippets in /etc/postgresql/version/cluster/conf.d/ and
+    include_dir='/etc/postgresql-common/createcluster.d' for pg_createcluster
+    config snippets.
+  * t/051_inconsistent_encoding_upgrade.t: Remove, only relevant for <= 8.2.
+  * logrotate config: Ship as static conffile again and remove ucf handling.
+  * pg_conftool: Fix operation when no cluster exists yet.
+  * pg_conftool: --boolean normalizes boolean variable in output; use this in
+    debian/maintscripts-functions.
+  * debian/maintscripts-functions: Unconditionally call invoke-rc.d, and drop
+    path names from program invocations (Standards-Version 4.0.0).
+  * debian/maintscripts-functions: Use 'invoke-rc.d "postgresql@$ver-*" stop'
+    to prevent upgrading/removing server packages from stopping other major
+    version clusters when running systemd. (Closes: #809811)
+  * debian/maintscripts-functions: Avoid update-alternatives failing if the
+    user removed /usr/share/man. (Closes: #866729)
+  * t/TestLib.pm: Vacuum tests left behind when postmaster and pg_autovacuum
+    were removed. Update test counts in *.t.
+  * B-D on debhelper (>= 10.1) | dh-systemd (>= 1.19) to pick up
+    dh_systemd_start.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Wed, 05 Jul 2017 16:15:48 +0200
+
+postgresql-common (182) experimental; urgency=medium
+
+  * Team upload.
+  * pg_buildext: Resurrect the previously deprecated "srcdir" mode to allow
+    building packages from a subdirectory, and make "loop" support it as well.
+  * t/001_packages.t: PostgreSQL 10 doesn't have a separate contrib package.
+  * t/020_create_sql_remove.t: Use CREATE EXTENSION, createlang is being
+    removed.
+  * t/120_pg_upgradecluster_scripts.t: Don't try to rename
+    pg_upgradecluster.d, fails on overlayfs.
+  * pg_lsclusters, t: pg_log directory name changed in 10.
+  * pg_lsclusters: Allow listing one version or one cluster only.
+  * pg_lsclusters: Support JSON output, suggest libjson-perl for that.
+  * pg_createcluster, createcluster.conf: Update for --waldir rename.
+  * pg_createcluster: Do not suppress initdb output, and use pg_lsclusters to
+    show created cluster info.
+  * pg_ctlcluster: Suppress "Redirecting to systemctl message".
+  * pg_upgradecluster: Deprecate min_parallel_relation_size and
+    sql_inheritance in 10.
+  * Symlink /usr/bin/pg_receivewal to pg_wrapper.
+  * PgCommon.pm: Include postgresql.conf in cluster_info and remove variables
+    directly copied from config; adjust callers.
+  * PgCommon.pm: Allow more characters in unquoted config values.
+    Spotted by Fabien Coelho, merci!
+  * postgresql-server-dev-all: dh_make_pgxs: Template mechanism for new
+    Debian packages based on PGXS Makefiles.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Thu, 11 May 2017 14:01:59 +0200
+
+postgresql-common (181) unstable; urgency=medium
+
+  * debian/postgresql-common.config: Fix deprecation warning debconf message
+    to use a numerical comparison on the version number.
+  * pg_buildext: Fix to use a numerical comparison on the version number.
+  * pg_buildext.pod: Drop outdated PG_VIRTUALENV_UNSHARE=-n documentation.
+  * pgdg/apt.postgresql.org.sh: Add known distributions.
+  * Updated Danish debconf translation by Joe Dalton, thanks!
+    (Closes: #856787)
+
+ -- Christoph Berg <myon@debian.org>  Sat, 15 Apr 2017 18:56:38 +0200
+
+postgresql-common (180) unstable; urgency=medium
+
+  * supported-versions: Retire 9.1 on apt.postgresql.org.
+
+ -- Christoph Berg <christoph.berg@credativ.de>  Thu, 09 Feb 2017 15:30:23 +0100
+
 postgresql-common (179) unstable; urgency=medium
 
   * Catch all pg_ctl output by redirecting it to /var/log/postgresql.

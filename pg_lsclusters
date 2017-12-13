@@ -2,7 +2,7 @@
 # Show all PostgreSQL clusters in a list
 #
 # (C) 2005-2009 Martin Pitt <mpitt@debian.org>
-# (C) 2013-2016 Christoph Berg <myon@debian.org>
+# (C) 2013-2017 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -18,34 +18,77 @@ use strict;
 use PgCommon;
 use Getopt::Long;
 
+# option handling
 my $no_header;
-exit 1 unless GetOptions ('h|no-header' => \$no_header);
+my $json;
+my $start_conf;
+exit 1 unless GetOptions (
+    'h|no-header' => \$no_header,
+    'j|json' => \$json,
+    's|start-conf' => \$start_conf,
+);
 
+my (@versions, $ls_cluster);
+if (@ARGV == 1 and $ARGV[0] =~ m{^(\d+(?:\.\d+)?)[-/]([-.\w]+)$}) {
+    push @versions, $1;
+    $ls_cluster = $2;
+} elsif (@ARGV >= 1) {
+    $ARGV[0] =~ /^(\d+(?:\.\d+)?)$/ or error "Invalid version number \"$ARGV[0]\"";
+    push @versions, $1;
+} else {
+    @versions = get_versions();
+}
+if (@ARGV >= 2 and $ARGV[1] =~ /^([-.\w]+)$/) {
+    $ls_cluster = $1;
+}
+
+error "Cluster @versions $ls_cluster does not exist"
+    if ($ls_cluster and not cluster_exists(@versions, $ls_cluster));
+
+# data collection
 my @lines;
 push @lines, ['Ver', 'Cluster', 'Port', 'Status', 'Owner', 'Data directory', 'Log file']
     unless ($no_header);
+my $jsoninfo = [];
 
-foreach my $v (sort { $a <=> $b } (get_versions())) {
-    my @clusters = get_version_clusters $v;
-    foreach my $c (sort @clusters) {
+foreach my $v (@versions) {
+    my $pg_log = $v >= 10 ? 'log' : 'pg_log'; # log directory in PGDATA changed in PG 10
+    my @clusters = $ls_cluster ? $ls_cluster : get_version_clusters $v;
+    foreach my $c (@clusters) {
         my %info = cluster_info $v, $c;
-        my $logfile = $info{logfile}; # default logfile in /var/log/postgresql
-        if (config_bool ($info{logging_collector})) {
-            my $path = $info{log_directory} || 'pg_log';
-            my $file = $info{log_filename} || 'postgresql-%Y-%m-%d_%H%M%S.log';
+
+        my $status = $info{'running'} ? "online" : "down";
+        $status .= ",recovery" if ($info{'recovery'});
+        $status .= ",$info{start}" if ($start_conf);
+
+        my $logfile = $info{logfile} // '<unknown>'; # default logfile in /var/log/postgresql
+        if (config_bool ($info{config}->{logging_collector})) {
+            my $path = $info{config}->{log_directory} || $pg_log;
+            my $file = $info{config}->{log_filename} || 'postgresql-%Y-%m-%d_%H%M%S.log';
             $logfile = "$path/$file";
         }
-        my $destination = $info{log_destination} || 'stderr';
+        my $destination = $info{config}->{log_destination} || 'stderr';
         $destination =~ s/stderr/$logfile/;
         my $csvlog = $logfile;
         $csvlog =~ s/(?:\.log)?$/.csv/;
         $destination =~ s/csvlog/$csvlog/;
 
-        push @lines, [$v, $c, $info{'port'},
-            ($info{'running'} ? "online" : "down") . ($info{'recovery'} ? ",recovery" : ""),
+        push @lines, [$v, $c, $info{'port'} // '<unknown>', $status,
             defined $info{'owneruid'} ? (getpwuid $info{'owneruid'})[0] : '<unknown>',
-            $info{'pgdata'} || '<not set>', $destination];
+            $info{'pgdata'} || '<unknown>', $destination];
+        $info{version} = $v;
+        $info{cluster} = $c;
+        push @$jsoninfo, \%info;
     }
+}
+
+# output
+if ($json) {
+    eval { require JSON; };
+    error 'Please install JSON.pm for JSON output (Debian: libjson-perl)'
+        if ($@);
+    print JSON::encode_json($jsoninfo) . "\n";
+    exit 0;
 }
 
 my @colwidth = qw(1 1 1 1 1 1 1);
@@ -60,16 +103,13 @@ my $color = -t 1; # color output if stdout is a terminal
 my $fmtstring = join ' ', map { "%-${_}s" } @colwidth;
 
 foreach my $line (@lines) {
-    if ($color and $line->[3] =~ /online/) {
-        print "\033[32m"; # green
-    } elsif ($color and $line->[3] =~ /down/) {
-        print "\033[31m"; # red
+    if ($color and $line->[0] ne 'Ver') { # don't color header
+        printf "\033[%dm$fmtstring\033[0m\n",
+            ($line->[3] =~ /^online/ ? 32 : 31), # green, red
+            @$line;
+    } else {
+        printf "$fmtstring\n", @$line;
     }
-    printf "$fmtstring\n", @$line;
-}
-
-if ($color) {
-    print "\033[0m"; # reset terminal
 }
 
 __END__
@@ -80,11 +120,12 @@ pg_lsclusters - show information about all PostgreSQL clusters
 
 =head1 SYNOPSIS
 
-B<pg_lsclusters> [I<options>]
+B<pg_lsclusters> [I<options>] [I<version> [I<cluster>]]
 
 =head1 DESCRIPTION
 
-This command shows a list about the configuration and status of all clusters.
+This command list the status and some configuration details of all clusters.
+If a version and optionally a cluster name are given, only these are shown.
 
 =head1 OPTIONS
 
@@ -93,6 +134,15 @@ This command shows a list about the configuration and status of all clusters.
 =item B<-h>, B<--no-header>
 
 Do not print the column header line.
+
+=item B<-j>, B<--json>
+
+Output information in JSON format. Needs JSON.pm installed.
+(Debian package: libjson-perl)
+
+=item B<-s>, B<--start-conf>
+
+Include F<start.conf> information in status column.
 
 =back
 

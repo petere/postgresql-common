@@ -24,6 +24,7 @@ use Getopt::Long;
 use POSIX qw/setsid dup2 :sys_wait_h/;
 use PgCommon;
 use Fcntl qw(SEEK_SET O_RDWR O_CREAT O_EXCL);
+use POSIX qw(lchown);
 
 my ($version, $cluster, $pg_ctl, $force);
 my (@postgres_auxoptions, @pg_ctl_opts_from_cli);
@@ -32,21 +33,10 @@ my $mode = 'smart'; # default shutdown mode
 my $foreground = 0; # don't daemonize, use postgres instead of pg_ctl
 my $stdlog = 0; # when run in foreground, still log to the default logfile
 
-# Check for known broken configurations of this cluster
-sub check_valid_config {
-    my %postgresql_conf = read_cluster_conf_file $version, $cluster,
-        'postgresql.conf';
-    my $log_statement_stats = config_bool $postgresql_conf{'log_statement_stats'};
-    my $log_parser_stats = config_bool $postgresql_conf{'log_parser_stats'};
-    my $log_planner_stats = config_bool $postgresql_conf{'log_planner_stats'};
-    my $log_executor_stats = config_bool $postgresql_conf{'log_executor_stats'};
-
-    # statement and other statistics are mutually exclusive
-    if ($log_statement_stats && ($log_parser_stats || $log_planner_stats ||
-	$log_executor_stats)) {
-	error ('invalid postgresql.conf: log_statement_stats and the other log_*_stats options are mutually exclusive');
-    }
-}
+# untaint environment
+$ENV{'PATH'} = '/sbin:/bin:/usr/sbin:/usr/bin';
+delete @ENV{'IFS', 'CDPATH', 'ENV', 'BASH_ENV'};
+chdir '/';
 
 # If a pid file is already present, delete it if it is stale/invalid, or exit
 # with a notice if it belongs to an already running postgres.
@@ -97,7 +87,7 @@ sub cluster_port_ready {
     my $out;
     while ($n < ($result ? 10 : 3)) {
         select undef, undef, undef, 0.5;
-        $out = `$psql -h '$sd' --port $p -l 2>&1 >/dev/null`;
+        $out = `$psql -h '$sd' --port $p -Xl 2>&1 >/dev/null`;
 
         if ($? == $result) {    
             $n++;
@@ -115,10 +105,6 @@ sub cluster_port_ready {
 }
 
 sub start {
-    my $cdir = $info{'configdir'};
-
-    check_valid_config;
-
     start_check_pid_file;
 
     # check conflicting port
@@ -146,6 +132,7 @@ sub start {
 	$postgres_opts .= "-c $usd=\"$info{'socketdir'}\"";
     }
 
+    my $cdir = $info{'configdir'};
     $postgres_opts .= " -c config_file=\"$cdir/postgresql.conf\"";
     if (!(PgCommon::get_conf_value $version, $cluster, 'postgresql.conf', 'hba_file')) {
         $postgres_opts .= " -c hba_file=\"$cdir/pg_hba.conf\"";
@@ -266,10 +253,18 @@ sub stop {
     stop_check_pid_file;
     my $result = 1;
 
+    my @options = ('stop', '-s', '-w', '-D', $info{'pgdata'});
+
+    push @options, @pg_ctl_opts_from_cli if @pg_ctl_opts_from_cli;
+
+    my %pg_ctl_opts_from_file = read_cluster_conf_file $version, $cluster, 'pg_ctl.conf';
+    push @options, split(' ', $pg_ctl_opts_from_file{'pg_ctl_options'})
+	if defined $pg_ctl_opts_from_file{'pg_ctl_options'} and $pg_ctl_opts_from_file{'pg_ctl_options'} ne '';
+
     if ($force) {
         if (!fork()) {
             close STDOUT;
-            exec $pg_ctl, '-D', $info{'pgdata'}, '-s', '-w', '-m', 'fast', @pg_ctl_opts_from_cli, 'stop';
+            exec $pg_ctl, @options, '-m', 'fast';
         } else {
             wait;
 	    $result = $? >> 8;
@@ -278,7 +273,7 @@ sub stop {
         # try harder if "fast" mode does not work
         if (-f $info{'pgdata'}.'/postmaster.pid') {
             print "(does not shutdown gracefully, now stopping immediately)\n";
-	    $result = system $pg_ctl, '-D', $info{'pgdata'}, '-s', '-w', '-m', 'immediate', @pg_ctl_opts_from_cli, 'stop';
+	    $result = system $pg_ctl, @options, '-m', 'immediate';
         }
 
         # if that still not helps, use the big hammer
@@ -291,7 +286,7 @@ sub stop {
     } else {
         if (!fork()) {
             close STDOUT;
-            exec $pg_ctl, '-D', $info{'pgdata'}, '-s', '-w', '-m', $mode, @pg_ctl_opts_from_cli, 'stop';
+            exec $pg_ctl, @options, '-m', $mode;
         } else {
             wait;
 	    $result = $? >> 8;
@@ -381,10 +376,6 @@ unless ($action eq 'stop') {
     error 'Cluster is disabled' if $info{'start'} eq 'disabled';
 }
 
-# untaint environment
-$ENV{'PATH'} = '/sbin:/bin:/usr/sbin:/usr/bin';
-delete @ENV{'IFS', 'CDPATH', 'ENV', 'BASH_ENV'};
-
 unless (-d $info{'pgdata'} && defined $info{'owneruid'}) {
     error $info{'pgdata'} . ' is not accessible or does not exist';
 }
@@ -422,7 +413,7 @@ if (not $skip_systemctl_redirect and getppid() != 1 and # not run from init
         if ($action eq 'stop' and not $unit_active) {
             # proceed with pg_ctlcluster
         } else {
-            print "Redirecting $action request to systemctl\n" if (-t 1);
+            #print "Redirecting $action request to systemctl\n" if (-t 1);
             system 'systemctl', $action, "postgresql\@$version-$cluster";
             exit $? >> 8;
             # program end
@@ -462,7 +453,7 @@ if ($action ne 'stop' && $info{'logfile'} && ! -e $info{'logfile'}) {
     $( = $) = 0;
     if ($info{'owneruid'} < 500) {
         my $g = (getgrnam 'adm')[2];
-        chown $info{'owneruid'}, $g, $info{'logfile'} if (defined $g);
+        lchown $info{'owneruid'}, $g, $info{'logfile'} if (defined $g);
     }
 }
 
@@ -473,9 +464,9 @@ if ($action ne 'stop' && ! -d $info{'socketdir'}) {
 }
 
 # recreate stats_temp_directory
-if ($action ne 'stop' && $info{'statstempdir'} && ! -d $info{'statstempdir'}) {
+if ($action ne 'stop' && $info{config}->{stats_temp_directory} && ! -d $info{config}->{stats_temp_directory}) {
     system 'install', '-d', '-m', 750,
-	'-o', $info{'owneruid'}, '-g', $info{'ownergid'}, $info{'statstempdir'};
+	'-o', $info{'owneruid'}, '-g', $info{'ownergid'}, $info{config}->{stats_temp_directory};
 }
 
 if ($> == 0) {
@@ -489,7 +480,6 @@ if ($> == 0) {
 	} 
     }
 
-    chdir ('/var/lib/postgresql');
     change_ugid $info{'owneruid'}, $info{'ownergid'};
 }
 
@@ -517,7 +507,7 @@ pg_ctlcluster - start/stop/restart/reload a PostgreSQL cluster
 
 =head1 SYNOPSIS
 
-B<pg_ctlcluster> [I<options>] I<cluster-version> I<cluster-name> I<action> B<--> [I<pg_ctl options>]
+B<pg_ctlcluster> [I<options>] I<cluster-version> I<cluster-name> I<action> [B<--> I<pg_ctl options>]
 
 where I<action> = B<start>|B<stop>|B<restart>|B<reload>|B<status>|B<promote>
 
@@ -543,7 +533,7 @@ To ease integration with B<systemd> operation, the alternative syntax
 A log file for this specific cluster is created if it does not exist yet (by
 default,
 C</var/log/postgresql/postgresql->I<cluster-version>C<->I<cluster-name>C<.log>),
-and a PostreSQL server process (L<postgres(1)>) is started on it. Exits with
+and a PostgreSQL server process (L<postgres(1)>) is started on it. Exits with
 0 on success, with 2 if the server is already running, and with 1 on other
 failure conditions.
 

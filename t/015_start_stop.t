@@ -4,7 +4,7 @@ use lib 't';
 use TestLib;
 use PgCommon;
 
-use Test::More tests => 73 * ($#MAJORS+1);
+use Test::More tests => 71 * @MAJORS;
 
 my $systemd = (-d "/var/run/systemd/system" and not $ENV{_SYSTEMCTL_SKIP_REDIRECT});
 note $systemd ? "We are running systemd" : "We are not running systemd";
@@ -70,7 +70,7 @@ sub check_major {
     # stop postgresql
     if ($systemd) {
         program_ok (0, "systemctl stop postgresql");
-        sleep 3; # FIXME: systemctl stop postgresql is not yet synchronous (#759725)
+        sleep 6; # FIXME: systemctl stop postgresql is not yet synchronous (#759725)
     } else {
         program_ok (0, "/etc/init.d/postgresql stop");
     }

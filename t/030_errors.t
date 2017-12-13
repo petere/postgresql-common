@@ -6,7 +6,7 @@ require File::Temp;
 
 use lib 't';
 use TestLib;
-use Test::More tests => 158;
+use Test::More tests => 149;
 use PgCommon;
 
 my $version = $MAJORS[-1];
@@ -175,23 +175,7 @@ like_program_out 'postgres', 'pg_lsclusters -h', 0, qr/online/, 'cluster is onli
 # start running server
 is_program_out 'postgres', "pg_ctlcluster $version main start", 2,
     "Cluster is already running.\n", 'pg_ctlcluster start fails on running cluster';
-
-# stop server, test invalid configuration
 is ((exec_as 'postgres', "pg_ctlcluster $version main stop"), 0, 'pg_ctlcluster stop');
-PgCommon::set_conf_value $version, 'main', 'postgresql.conf',
-    'log_statement_stats', 'true';
-PgCommon::set_conf_value $version, 'main', 'postgresql.conf',
-    'log_planner_stats', 'true';
-like_program_out 'postgres', "pg_ctlcluster $version main start", 1,
-    qr/Error: invalid postgresql.conf.*log_.*mutually exclusive/,
-    'pg_ctlcluster start fails with invalid configuration';
-
-# repair configuration
-PgCommon::set_conf_value $version, 'main', 'postgresql.conf',
-    'log_planner_stats', 'false';
-is_program_out 'postgres', "pg_ctlcluster $version main start", 0, '',
-    'pg_ctlcluster start succeeds again with valid configuration';
-is_program_out 'postgres', "pg_ctlcluster $version main stop", 0, '', 'stopping cluster';
 
 # backup pg_hba.conf
 rename "/etc/postgresql/$version/main/pg_hba.conf",
@@ -294,6 +278,7 @@ ok_dir $socketdir, [], 'No sockets any more';
 rmdir $socketdir or die "rmdir: $!";
 
 # ensure sane error messages for nonexisting clusters
+check_nonexisting_cluster_error 'pg_lsclusters 4.5 foo';
 check_nonexisting_cluster_error 'psql --cluster 4.5/foo';
 check_nonexisting_cluster_error "psql --cluster $MAJORS[0]/foo";
 check_nonexisting_cluster_error "pg_dropcluster 4.5 foo";
@@ -325,8 +310,8 @@ mkdir "/etc/postgresql/$MAJORS[-1]/broken";
 mkdir "/var/lib/postgresql/$MAJORS[-1]";
 mkdir "/var/lib/postgresql/$MAJORS[-1]/broken";
 mkdir "/var/lib/postgresql/$MAJORS[-1]/broken/base" or die "mkdir: $!";
-symlink "/var/lib/postgresql/$MAJORS[-1]/broken", "/etc/postgresql/$MAJORS[-1]/broken/pgdata" or die "symlink: $!";
 open F, ">/etc/postgresql/$MAJORS[-1]/broken/postgresql.conf" or die "open: $!";
+print F "data_directory = '/var/lib/postgresql/$MAJORS[-1]/broken'\n";
 close F;
 open F, ">/var/lib/postgresql/$MAJORS[-1]/broken/PG_VERSION" or die "open: $!";
 close F;

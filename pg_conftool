@@ -2,7 +2,7 @@
 # Read and edit PostgreSQL config files
 # vim:sw=4:et:
 #
-# (C) 2014-2016 Christoph Berg <myon@debian.org>
+# (C) 2014-2017 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@ use warnings;
 use Getopt::Long;
 use PgCommon qw(quote_conf_value user_cluster_map read_cluster_conf_file
     read_conf_file set_conffile_value set_conf_value disable_conffile_value
-    disable_conf_value cluster_exists error);
+    disable_conf_value cluster_exists error config_bool);
 
 ## option parsing
 
@@ -31,6 +31,7 @@ sub help ($;$)
   $0 [options] [<version> <cluster name>] [<configfile>] <command>
 
 Options:
+  -b --boolean  Format output as boolean
   -s --short    Print only value
   -v --verbose  Verbose output
   --help        This help
@@ -39,15 +40,19 @@ Commands:
   show <parameter>|all
   set <parameter> <value>
   remove <parameter>
+  edit
 ";
     exit $exit;
 }
 
+my $boolean = 0;
 my $short = 0;
 my $verbose = 0;
 
+Getopt::Long::Configure ("bundling");
 help(1) unless GetOptions (
     'help' => sub { help(0); },
+    'b|boolean' => \$boolean,
     's|short' => \$short,
     'v|verbose' => \$verbose,
 );
@@ -63,22 +68,28 @@ for (my $i = 0; $i < @ARGV; $i++) {
 help(1, 'No command given') unless (defined $cmdidx);
 
 my ($version, $cluster, $conffile);
-if ($cmdidx == 0) {
+if ($cmdidx == 0) { # operate on postgresql.conf in default cluster
     ($version, $cluster) = user_cluster_map();
+    error "No default cluster found" unless ($cluster);
     $conffile = 'postgresql.conf';
-} elsif ($cmdidx == 1) {
-    ($version, $cluster) = user_cluster_map();
+} elsif ($cmdidx == 1) { # operate on given file; default cluster must exist if file is relative
     $conffile = $ARGV[0];
-} elsif ($cmdidx == 2) {
+    unless ($conffile =~ m!^/!) {
+        ($version, $cluster) = user_cluster_map();
+        error "No default cluster found" unless ($cluster);
+    }
+} elsif ($cmdidx == 2) { # version cluster, postgresql.conf
     ($version, $cluster, $conffile) = ($ARGV[0], $ARGV[1], 'postgresql.conf');
-} elsif ($cmdidx == 3) {
+} elsif ($cmdidx == 3) { # version cluster conffile
     ($version, $cluster, $conffile) = ($ARGV[0], $ARGV[1], $ARGV[2]);
 } else {
     help(1, 'Too many arguments before command');
 }
 
-error "Cluster $version $cluster does not exist"
-    unless (cluster_exists $version, $cluster);
+if ($cluster) { # the cluster needs to exist unless an absolute conffile was given
+    error "Cluster $version $cluster does not exist"
+        unless (cluster_exists $version, $cluster);
+}
 
 splice @ARGV, 0, $cmdidx; # remove everything before the command
 $ARGV[0] = 'show' if ($ARGV[0] eq 'get'); # accept alternative variants of some commands
@@ -101,7 +112,7 @@ if ($ARGV[0] =~ /^(edit)$/) {
 
 if ($cmd eq 'show') {
     my %conf;
-    if ($conffile =~ m!/!) {
+    if ($conffile =~ m!^/!) {
         %conf = read_conf_file ($conffile);
     } else {
         %conf = read_cluster_conf_file ($version, $cluster, $conffile);
@@ -112,6 +123,7 @@ if ($cmd eq 'show') {
             printf "%s = %s\n", $k, quote_conf_value($conf{$k});
         }
     } elsif (exists $conf{$key}) {
+        $conf{$key} = config_bool($conf{$key}) ? 'on' : 'off' if ($boolean); # normalize boolean output on request
         if ($short) {
             printf "%s\n", $conf{$key};
         } else {
@@ -123,14 +135,14 @@ if ($cmd eq 'show') {
     }
 
 } elsif ($cmd eq 'set') {
-    if ($conffile =~ m!/!) {
+    if ($conffile =~ m!^/!) {
         set_conffile_value ($conffile, $key, $value);
     } else {
         set_conf_value ($version, $cluster, $conffile, $key, $value);
     }
 
 } elsif ($cmd eq 'remove') {
-    if ($conffile =~ m!/!) {
+    if ($conffile =~ m!^/!) {
         disable_conffile_value ($conffile, $key);
     } else {
         disable_conf_value ($version, $cluster, $conffile, $key);
@@ -141,7 +153,7 @@ if ($cmd eq 'show') {
     if ($ENV{EDITOR}) {
         ($editor) = $ENV{EDITOR} =~ /(.*)/; # untaint
     }
-    if ($conffile =~ m!/!) {
+    if ($conffile =~ m!^/!) {
         system $editor, $conffile;
     } else {
         system $editor, "$PgCommon::confroot/$version/$cluster/$conffile";
@@ -171,6 +183,10 @@ I<version> I<cluster> is ignored.
 =head1 OPTIONS
 
 =over 4
+
+=item B<-b>, B<--boolean>
+
+Format boolean value as B<on> or B<off> (not for "show all").
 
 =item B<-s>, B<--short>
 

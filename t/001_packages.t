@@ -6,7 +6,7 @@ use lib 't';
 use TestLib;
 use POSIX qw/setlocale LC_ALL LC_MESSAGES/;
 
-use Test::More tests => $PgCommon::rpm ? (8*@MAJORS) : (12 + 7*@MAJORS);
+use Test::More tests => $PgCommon::rpm ? (8*@MAJORS) : (11 + 7*@MAJORS);
 
 note "PostgreSQL versions installed: @MAJORS\n";
 
@@ -38,11 +38,13 @@ foreach my $v (@MAJORS) {
     ok ((deb_installed "postgresql-plperl-$v"), "postgresql-plperl-$v installed");
     ok ((deb_installed "postgresql-pltcl-$v"), "postgresql-pltcl-$v installed");
     ok ((deb_installed "postgresql-server-dev-$v"), "postgresql-server-dev-$v installed");
+  SKIP: {
+    skip "No postgresql-contrib-$v package for version $v", 1 if ($v >= 10);
     ok ((deb_installed "postgresql-contrib-$v"), "postgresql-contrib-$v installed");
+  }
 }
 
 ok ((deb_installed 'libecpg-dev'), 'libecpg-dev installed');
-ok ((deb_installed 'logrotate'), 'logrotate installed');
 ok ((deb_installed 'procps'), 'procps installed');
 ok ((deb_installed 'netcat-openbsd'), 'netcat-openbsd installed');
 

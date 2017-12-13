@@ -26,7 +26,7 @@ our @EXPORT = qw/ps ok_dir exec_as deb_installed rpm_installed package_version
     pidof pid_env check_clean
     @ALL_MAJORS @MAJORS $delay/;
 
-our @ALL_MAJORS = sort { $a <=> $b } (get_versions()); # not affected by PG_VERSIONS/-v
+our @ALL_MAJORS = get_versions(); # not affected by PG_VERSIONS/-v
 our @MAJORS = $ENV{PG_VERSIONS} ? split (/\s+/, $ENV{PG_VERSIONS}) : @ALL_MAJORS;
 our $delay = 500_000; # 500ms
 
@@ -224,10 +224,8 @@ sub unlike_program_out {
 # postgres processes are running. Should be called at the end
 # of all tests. Does 10 tests.
 sub check_clean {
-    is (`pg_lsclusters -h`, '', 'No existing clusters');
-    pass ''; # was postmaster
+    is (`pg_lsclusters -h`, '', 'Cleanup: No clusters left behind');
     is ((ps 'postgres'), '', 'No postgres processes left behind');
-    pass ''; # this was pg_autovacuum in the past, which is obsolete
 
     my @check_dirs = ('/etc/postgresql', '/var/lib/postgresql',
         '/var/run/postgresql');

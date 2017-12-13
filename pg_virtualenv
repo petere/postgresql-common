@@ -4,7 +4,7 @@
 # This does not interfere with existing clusters.
 #
 # (C) 2005-2012 Martin Pitt <mpitt@debian.org>
-# (C) 2012-2015 Christoph Berg <myon@debian.org>
+# (C) 2012-2017 Christoph Berg <myon@debian.org>
 #
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -78,7 +78,7 @@ while getopts "ac:i:ho:stv:" opt ; do
 done
 if [ -z "$PG_VERSIONS" ]; then
     # use latest version
-    d=$(ls $PGBINROOT*/bin/pg_ctl | tail -1)
+    d=$(ls -v $PGBINROOT*/bin/pg_ctl | tail -1)
     dir=${d%%/bin/pg_ctl}
     PG_VERSIONS="${dir#$PGBINROOT}"
 fi
@@ -114,10 +114,8 @@ if [ "${NONROOT:-}" ]; then
     cleanup () {
 	set +e
 	for v in $PG_VERSIONS; do
-            if [ ! -f $PG_CLUSTER_CONF_ROOT/$v/regress/.by_pg_virtualenv ]; then
-                echo "BUG: Cluster $v/regress was not created by me (PGSYSCONFDIR=${PGSYSCONFDIR:-}, PG_CLUSTER_CONF_ROOT=${PG_CLUSTER_CONF_ROOT:-})" >&2
-                continue
-            fi
+            # don't drop existing clusters named "regress"
+            [ -f $PG_CLUSTER_CONF_ROOT/$v/regress/.by_pg_virtualenv ] || continue
             echo "Dropping cluster $v/regress ..."
 	    pg_ctlcluster --mode immediate $v regress stop
 	done
@@ -148,10 +146,8 @@ else
             mv -f $pg_service.pg_virtualenv-save.$$ $pg_service
         fi
 	for v in $PG_VERSIONS; do
-            if [ ! -f /etc/postgresql/$v/regress/.by_pg_virtualenv ]; then
-                echo "BUG: Cluster $v/regress was not created by me (PGSYSCONFDIR=${PGSYSCONFDIR:-}, PG_CLUSTER_CONF_ROOT=${PG_CLUSTER_CONF_ROOT:-})" >&2
-                continue
-            fi
+            # don't drop existing clusters named "regress"
+            [ -f /etc/postgresql/$v/regress/.by_pg_virtualenv ] || continue
             echo "Dropping cluster $v/regress ..."
             rm -f /etc/postgresql/$v/regress/.by_pg_virtualenv
 	    pg_ctlcluster --mode immediate $v regress stop
@@ -186,11 +182,10 @@ for v in $PG_VERSIONS; do
 	    ${PGPORT:+-p "$PGPORT"} \
 	    ${NONROOT:+-d "$WORKDIR/data/$v/regress"} \
 	    ${NONROOT:+-l "$WORKDIR/log/postgresql-$v-regress.log"} \
-	    ${CREATE_OPTS:-} "${PGCONF_OPTS[@]}" $v regress -- \
+            ${CREATE_OPTS:-} --pgoption fsync=off "${PGCONF_OPTS[@]}" --start $v regress -- \
 	    --username="$PGUSER" --pwfile="$PWFILE" $NOSYNC ${INITDB_OPTS:-}
 	# in fakeroot, the username will likely default to "postgres" otherwise
         echo "This is a temporary throw-away cluster" > ${PG_CLUSTER_CONF_ROOT:-/etc/postgresql}/$v/regress/.by_pg_virtualenv
-	pg_ctlcluster -o '-F' $v regress start
     )
     port=$(pg_conftool -s $v regress show port)
 
@@ -218,6 +213,7 @@ case $PG_VERSIONS in
 esac
 
 # run program
+echo
 "$@" || EXIT="$?"
 if [ ${EXIT:-0} -gt 0 ]; then
     for log in ${LOGDIR:-/var/log/postgresql}/*.log; do
