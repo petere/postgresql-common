@@ -46,11 +46,9 @@ man: $(POD1PROGS) $(POD1PROGS_POD) $(POD8PROGS)
 clean:
 	rm -f *.1 *.8 dh_make_pgxs/*.1
 
-
 common_programs = pg_wrapper pg_config pg_conftool pg_createcluster pg_ctlcluster pg_dropcluster pg_lsclusters pg_updatedicts pg_upgradecluster
 
 wrapped_programs = clusterdb createdb createlang createuser dropdb droplang dropuser pg_dump pg_dumpall pg_basebackup pg_isready pg_restore pg_receivexlog psql reindexdb vacuumdb vacuumlo pgbench
-
 
 installdirs:
 	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(pkgdatadir) $(DESTDIR)$(pkgsysconfdir) $(addprefix $(DESTDIR)$(mandir)/,man1 man5 man7 man8)
@@ -76,3 +74,24 @@ install: all installdirs
 	$(DESTDIR)$(pkgdatadir)/PgCommon.pm
 	for f in $(wrapped_programs); do (cd $(DESTDIR)$(bindir) && ln -f -s pg_wrapper $$f) || exit; done
 	cd $(DESTDIR)$(mandir)/man7 && ln -f -s ../man1/pg_wrapper.1 postgresql-common.7
+
+# rpm
+
+DPKG_VERSION=$(shell sed -ne '1s/.*(//; 1s/).*//p' debian/changelog)
+RPM_VERSION=$(shell awk '/^Version:/ { print $$2 }' rpm/postgresql-common.spec)
+RPMDIR=$(HOME)/rpmbuild
+TARBALL=$(RPMDIR)/SOURCES/postgresql-common_$(DPKG_VERSION).tar.xz
+
+rpm: $(TARBALL)
+	[ "$(DPKG_VERSION)" = "$(RPM_VERSION)" ]
+	rpmbuild -ba rpm/postgresql-common.spec
+
+$(TARBALL):
+	mkdir -p $(dir $(TARBALL))
+	git archive --prefix=postgresql-common-$(DPKG_VERSION)/ HEAD | xz > $(TARBALL)
+
+rpminstall:
+	sudo rpm --upgrade --replacefiles --replacepkgs -v $(RPMDIR)/RPMS/noarch/*-$(DPKG_VERSION)-*.rpm
+
+rpmclean:
+	rm -rf $(TARBALL) $(RPMDIR)/BUILD
